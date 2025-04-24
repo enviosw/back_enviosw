@@ -10,7 +10,7 @@ export class UsuariosService {
   constructor(
     @InjectRepository(Usuario)
     private readonly usuarioRepository: Repository<Usuario>,
-  ) {}
+  ) { }
 
   async create(createUsuarioDto: CreateUsuarioDto): Promise<Usuario> {
     const nuevoUsuario = this.usuarioRepository.create(createUsuarioDto);
@@ -25,6 +25,10 @@ export class UsuariosService {
     const usuario = await this.usuarioRepository.findOne({ where: { id } });
     if (!usuario) throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
     return usuario;
+  }
+
+  async findOneByEmail(email: string) {
+    return await this.usuarioRepository.findOneBy({ email });
   }
 
   async update(id: number, updateUsuarioDto: UpdateUsuarioDto): Promise<Usuario> {
