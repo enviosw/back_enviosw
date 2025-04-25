@@ -3,6 +3,8 @@ import { UsuariosModule } from './usuarios/usuarios.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
+import { ComerciosModule } from './comercios/comercios.module';
+import { TiposComerciosModule } from './tipos_comercios/tipos_comercios.module';
 
 @Module({
   imports: [
@@ -21,13 +23,17 @@ import { AuthModule } from './auth/auth.module';
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: false,
       }),
     }),
 
     UsuariosModule,
 
     AuthModule,
+
+    ComerciosModule,
+
+    TiposComerciosModule,
   ],
 })
-export class AppModule {}
+export class AppModule { }
