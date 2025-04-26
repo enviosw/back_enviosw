@@ -23,7 +23,7 @@ import { TiposComerciosModule } from './tipos_comercios/tipos_comercios.module';
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: false,
+        synchronize: true,
       }),
     }),
 

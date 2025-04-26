@@ -19,9 +19,6 @@ export class Comercio {
     descripcion: string;
 
     @Column({ length: 100 })
-    categoria: string;
-
-    @Column({ length: 100 })
     responsable: string;
 
     @Column({ length: 100, unique: true })

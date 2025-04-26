@@ -24,10 +24,6 @@ export class CreateComercioDto {
 
     @IsString()
     @IsNotEmpty()
-    categoria: string;
-
-    @IsString()
-    @IsNotEmpty()
     responsable: string;
 
     @IsEmail()
