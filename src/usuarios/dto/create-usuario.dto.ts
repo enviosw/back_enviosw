@@ -15,7 +15,6 @@ export class CreateUsuarioDto {
   @IsOptional()
   readonly rol?: string;
 
-  @IsBoolean()
   @IsOptional()
-  readonly estado?: boolean;
+  readonly estado?: string;
 }

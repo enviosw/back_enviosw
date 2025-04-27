@@ -24,7 +24,7 @@ export class Usuario {
     rol: string;
 
     @Column({ name: 'estado', default: true })
-    estado: boolean;
+    estado: string;
 
     @CreateDateColumn({ name: 'fecha_creacion' })
     fecha_creacion: Date;

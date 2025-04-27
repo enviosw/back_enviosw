@@ -39,7 +39,7 @@ export class CreateComercioDto {
     telefono_secundario: string
 
     @IsString()
-    @Length(10, 255)
+    @Length(4, 255)
     direccion: string;
 
     @IsOptional()
@@ -47,6 +47,5 @@ export class CreateComercioDto {
     logo_url?: string;
 
     @IsOptional()
-    @IsBoolean()
-    activo?: boolean;
+    activo?: string;
 }

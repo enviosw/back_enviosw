@@ -1,5 +1,7 @@
+import { Producto } from 'src/productos/entities/producto.entity';
+import { Servicio } from 'src/servicios/entities/servicio.entity';
 import { TipoComercio } from 'src/tipos_comercios/entities/tipos_comercio.entity';
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
 
 @Entity('comercios')
 export class Comercio {
@@ -37,7 +39,7 @@ export class Comercio {
     logo_url: string;
 
     @Column({ default: true })
-    activo: boolean;
+    activo: string;
 
     @CreateDateColumn({ name: 'fecha_creacion' })
     fecha_creacion: Date;
@@ -45,7 +47,11 @@ export class Comercio {
     @UpdateDateColumn({ name: 'fecha_actualizacion' })
     fecha_actualizacion: Date;
 
-    @ManyToOne(() => TipoComercio, tipo => tipo.comercios, { eager: true })
-    @JoinColumn({ name: 'tipo_id' })
-    tipo: TipoComercio;
+    // Relación con la entidad Servicio
+    @ManyToOne(() => Servicio, servicio => servicio.comercios, { eager: true })
+    @JoinColumn({ name: 'servicio_id' })
+    servicio: Servicio;
+
+    @OneToMany(() => Producto, (producto) => producto.comercio) // Relación con Producto
+    productos: Producto[]; // Esta es la propiedad que permite acceder a los productos de un comercio
 }

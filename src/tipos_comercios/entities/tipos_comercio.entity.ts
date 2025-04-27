@@ -1,6 +1,6 @@
 // src/tipos-comercio/entities/tipo-comercio.entity.ts
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
-import { Comercio } from '../../comercios/entities/comercio.entity';
+// import { Comercio } from '../../comercios/entities/comercio.entity';
 
 @Entity('tipos_comercio')
 export class TipoComercio {
@@ -13,6 +13,6 @@ export class TipoComercio {
   @Column({ length: 255 })
   descripcion: string;
 
-  @OneToMany(() => Comercio, comercio => comercio.tipo)
-  comercios: Comercio[];
+  // @OneToMany(() => Comercio, comercio => comercio.tipo)
+  // comercios: Comercio[];
 }
