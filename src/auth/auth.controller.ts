@@ -1,27 +1,56 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards, Request, Get } from "@nestjs/common";
-import { LoginDto } from "./dto/login.dto";
-import { RegisterDto } from "./dto/registrar-usuario.dto";
-import { AuthService } from "./auth.service";
-import { AuthGuard } from "./auth.guard";
+import {
+  Controller,
+  Post,
+  Body,
+  HttpStatus,
+  HttpCode,
+  UseGuards,
+  Get,
+  Request,
+} from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { RegisterDto } from './dto/registrar-usuario.dto';
+import { LoginDto } from './dto/login.dto';
+import { AuthGuard } from '@nestjs/passport';
+import { RolesGuard } from './roles.guard';
+import { Roles } from './roles.decorator';
 
-@Controller("auth")
+@Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) { }
 
-  @Post("register")
-  register(@Body() registerDto: RegisterDto) {
-    return this.authService.register(registerDto);
+  @Post('register')
+  register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post("login")
-  login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+  @Post('login')
+  login(@Body() dto: LoginDto) {
+    return this.authService.login(dto);
   }
 
   @Get('profile')
-  @UseGuards(AuthGuard)
-  profile(@Request() req) {
+  @UseGuards(AuthGuard('jwt'))
+  getProfile(@Request() req) {
     return req.user;
+  }
+
+  @Get('admin-only')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('administrador')
+  adminData() {
+    return { message: 'Solo accesible por administradores' };
+  }
+
+  @Post('refresh')
+  refreshToken(@Body() body: { userId: number; refreshToken: string }) {
+    return this.authService.refresh(body.userId, body.refreshToken);
+  }
+
+  @Post('logout')
+  @UseGuards(AuthGuard('jwt'))
+  logout(@Request() req) {
+    return this.authService.logout(req.user.userId);
   }
 }

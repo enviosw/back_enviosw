@@ -1,16 +1,22 @@
 import { Module } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { AuthController } from './auth.controller';
-import { UsuariosModule } from 'src/usuarios/usuarios.module';
 import { JwtModule } from '@nestjs/jwt';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { JwtStrategy } from './jwt.strategy';
+import { UsuariosModule } from 'src/usuarios/usuarios.module';
 import { jwtConstants } from './constants/jwt.constant';
+import { RefreshTokenService } from './refresh-token.service';
 
 @Module({
-  imports: [JwtModule.register({
-    secret: jwtConstants.secret,
-    signOptions: { expiresIn: '1h' } // El token expirará en 1 hora.
-  }), UsuariosModule],
+  imports: [
+    UsuariosModule,
+    JwtModule.register({}),
+  ],
   controllers: [AuthController],
-  providers: [AuthService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    RefreshTokenService,
+  ],
 })
-export class AuthModule { }
+export class AuthModule {}

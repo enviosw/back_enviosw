@@ -1,3 +1,6 @@
 export const jwtConstants = {
-    secret: "no utilizar en producción",
-  };
+  accessTokenSecret: 'ACCESS_SECRET',
+  refreshTokenSecret: 'REFRESH_SECRET',
+  accessTokenExpiration: '15m',
+  refreshTokenExpiration: '7d',
+};
