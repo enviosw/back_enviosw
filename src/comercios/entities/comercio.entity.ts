@@ -14,7 +14,7 @@ export class Comercio {
     @Column({ length: 200 })
     razon_social: string;
 
-    @Column({ length: 20, unique: true })
+    @Column({ length: 20 })
     nit: string;
 
     @Column({ length: 255 })
@@ -23,7 +23,7 @@ export class Comercio {
     @Column({ length: 100 })
     responsable: string;
 
-    @Column({ length: 100, unique: true })
+    @Column({ length: 100 })
     email_contacto: string;
 
     @Column({ length: 15 })
@@ -39,7 +39,7 @@ export class Comercio {
     logo_url: string;
 
     @Column({ default: true })
-    activo: string;
+    estado: string;
 
     @CreateDateColumn({ name: 'fecha_creacion' })
     fecha_creacion: Date;

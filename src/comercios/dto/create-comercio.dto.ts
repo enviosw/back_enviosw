@@ -1,5 +1,5 @@
 // src/comercios/dto/create-comercio.dto.ts
-import { IsString, IsEmail, IsOptional, IsBoolean, Length, IsNotEmpty } from 'class-validator';
+import { IsString, IsEmail, IsOptional, Length, IsNotEmpty, IsInt } from 'class-validator';
 
 export class CreateComercioDto {
     @IsString()
@@ -18,7 +18,7 @@ export class CreateComercioDto {
     nit: string;
 
     @IsString()
-    @Length(10, 255)
+    @Length(5, 255)
     @IsNotEmpty()
     descripcion: string;
 
@@ -46,6 +46,9 @@ export class CreateComercioDto {
     @IsString()
     logo_url?: string;
 
+    @IsNotEmpty()
+    servicio_id: number
+
     @IsOptional()
-    activo?: string;
+    estado?: string;
 }

@@ -4,23 +4,77 @@ import { Repository } from 'typeorm';
 import { Comercio } from './entities/comercio.entity';
 import { CreateComercioDto } from './dto/create-comercio.dto';
 import { UpdateComercioDto } from './dto/update-comercio.dto';
+import { ComercioQuery } from './interfaces/comercio.interface';
 
 @Injectable()
 export class ComerciosService {
   constructor(
     @InjectRepository(Comercio)
     private readonly comercioRepo: Repository<Comercio>,
-  ) {}
+  ) { }
 
   // Crear un nuevo comercio
   async create(dto: CreateComercioDto): Promise<Comercio> {
-    const comercio = this.comercioRepo.create(dto);
+
+    const comercio = this.comercioRepo.create({ ...dto, servicio: { id: dto.servicio_id, estado: 'activo' } });
+
+    console.log(comercio)
     return await this.comercioRepo.save(comercio);
   }
 
   // Obtener todos los comercios
-  async findAll(): Promise<Comercio[]> {
-    return await this.comercioRepo.find();
+  async findAll(query: ComercioQuery) {
+    const take = 20;
+    const skip = (query.page - 1) * take;
+
+    const qb = this.comercioRepo.createQueryBuilder('comercio')
+      .leftJoinAndSelect('comercio.servicio', 'servicio'); // ⬅️ Aquí se une la relación
+
+
+    if (query.search) {
+      const palabras = query.search.trim().split(/\s+/);
+
+      palabras.forEach((palabra, index) => {
+        const param = `palabra${index}`;
+        qb.andWhere(
+          `(
+            comercio.nombre_comercial ILIKE :${param} OR 
+            comercio.razon_social ILIKE :${param} OR 
+            comercio.nit ILIKE :${param} OR 
+            comercio.descripcion ILIKE :${param} OR 
+            comercio.responsable ILIKE :${param} OR 
+            comercio.email_contacto ILIKE :${param} OR 
+            comercio.telefono ILIKE :${param} OR 
+            comercio.telefono_secundario ILIKE :${param} OR 
+            comercio.direccion ILIKE :${param}
+          )`,
+          { [param]: `%${palabra}%` }
+        );
+      });
+    }
+
+
+    if (query.estado) {
+      qb.andWhere('comercio.estado = :estado', { estado: query.estado });
+    }
+
+    if (query.fechaInicio && query.fechaFin) {
+      qb.andWhere('comercio.fecha_creacion BETWEEN :inicio AND :fin', {
+        inicio: query.fechaInicio,
+        fin: query.fechaFin,
+      });
+    }
+
+    qb.skip(skip).take(take).orderBy('comercio.fecha_creacion', 'DESC');
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      total,
+      page: query.page,
+      lastPage: Math.ceil(total / take),
+    };
   }
 
   // Obtener un comercio por su ID
@@ -34,10 +88,22 @@ export class ComerciosService {
 
   // Actualizar un comercio
   async update(id: number, dto: UpdateComercioDto): Promise<Comercio> {
-    const comercio = await this.findOne(id);
-    const updated = Object.assign(comercio, dto);
-    return await this.comercioRepo.save(updated);
+
+    const comercio = await this.comercioRepo.findOne({ where: { id } });
+
+    if (!comercio) {
+      throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+    }
+
+
+    Object.assign(comercio, {
+      ...dto,
+      servicio: dto.servicio_id ? { id: dto.servicio_id } : comercio.servicio,
+    });
+
+    return await this.comercioRepo.save(comercio);
   }
+
 
   // Eliminar un comercio
   async remove(id: number): Promise<void> {
@@ -48,25 +114,25 @@ export class ComerciosService {
 
   async findComerciosByServicio(servicioId: number): Promise<Comercio[]> {
     return await this.comercioRepo.find({
-        where: {
-            servicio: { id: servicioId } // Filtrar comercios donde el servicio es igual al servicioId proporcionado
-        },
-        select: [
-            'id', 
-            'nombre_comercial', 
-            'descripcion', 
-            'responsable', 
-            'email_contacto', 
-            'telefono', 
-            'telefono_secundario', 
-            'direccion', 
-            'logo_url', 
-            'activo', 
-            'fecha_creacion', 
-            'fecha_actualizacion',
-        ],
+      where: {
+        servicio: { id: servicioId } // Filtrar comercios donde el servicio es igual al servicioId proporcionado
+      },
+      select: [
+        'id',
+        'nombre_comercial',
+        'descripcion',
+        'responsable',
+        'email_contacto',
+        'telefono',
+        'telefono_secundario',
+        'direccion',
+        'logo_url',
+        'estado',
+        'fecha_creacion',
+        'fecha_actualizacion',
+      ],
     });
-}
+  }
 
 
 }

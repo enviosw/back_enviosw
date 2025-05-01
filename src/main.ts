@@ -9,7 +9,11 @@ async function bootstrap() {
     methods: '*',         // Permite todos los métodos: GET, POST, PUT, DELETE, etc.
     allowedHeaders: '*',  // Permite todos los headers
   });
-  app.useGlobalPipes(new ValidationPipe());
+  app.useGlobalPipes( new ValidationPipe({
+    whitelist: true, // ✔️ elimina propiedades no definidas en el DTO
+    forbidNonWhitelisted: false, // ❌ NO lanza error si vienen extras
+    transform: true,
+  }),);
 
   await app.listen(process.env.PORT ?? 3000);
 }

@@ -23,17 +23,31 @@ export class ComerciosController {
     return this.comerciosService.create(createComercioDto);
   }
 
-  @Get()
-  findAll() {
-    return this.comerciosService.findAll();
-  }
+// comercios.controller.ts
+@Get()
+findAll(
+  @Query('page') page = 1,
+  @Query('search') search?: string,
+  @Query('estado') estado?: string,
+  @Query('fechaInicio') fechaInicio?: string,
+  @Query('fechaFin') fechaFin?: string,
+) {
+  return this.comerciosService.findAll({
+    page: +page,
+    search,
+    estado,
+    fechaInicio,
+    fechaFin,
+  });
+}
+
 
 
   @Get('publicos')
   async findAllComercios(@Query('servicio_id') servicioId: number): Promise<Comercio[]> {
-      return this.comerciosService.findComerciosByServicio(servicioId);
+    return this.comerciosService.findComerciosByServicio(servicioId);
   }
-  
+
 
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
@@ -48,6 +62,7 @@ export class ComerciosController {
     @Body() updateComercioDto: UpdateComercioDto,
     @UploadedFile() file: Express.Multer.File,  // Aquí se recibe el archivo
   ) {
+
     if (file) {
       updateComercioDto.logo_url = file.filename;  // Actualizamos el nombre del archivo
     }
