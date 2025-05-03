@@ -10,7 +10,7 @@ export class UsuariosService {
   constructor(
     @InjectRepository(Usuario)
     private readonly usuarioRepository: Repository<Usuario>,
-  ) { }
+  ) {}
 
   async create(createUsuarioDto: CreateUsuarioDto): Promise<Usuario> {
     const nuevoUsuario = this.usuarioRepository.create(createUsuarioDto);
@@ -23,7 +23,8 @@ export class UsuariosService {
 
   async findOne(id: number): Promise<Usuario> {
     const usuario = await this.usuarioRepository.findOne({ where: { id } });
-    if (!usuario) throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
+    if (!usuario)
+      throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
     return usuario;
   }
 
@@ -31,7 +32,10 @@ export class UsuariosService {
     return await this.usuarioRepository.findOneBy({ email });
   }
 
-  async update(id: number, updateUsuarioDto: UpdateUsuarioDto): Promise<Usuario> {
+  async update(
+    id: number,
+    updateUsuarioDto: UpdateUsuarioDto,
+  ): Promise<Usuario> {
     const usuario = await this.findOne(id);
     const actualizado = this.usuarioRepository.merge(usuario, updateUsuarioDto);
     return await this.usuarioRepository.save(actualizado);

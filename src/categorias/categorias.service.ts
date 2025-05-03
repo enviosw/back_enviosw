@@ -9,7 +9,7 @@ export class CategoriasService {
   constructor(
     @InjectRepository(Categoria)
     private categoriesRepository: Repository<Categoria>,
-  ) { }
+  ) {}
 
   async create(nombre: string): Promise<Categoria> {
     const categoria = this.categoriesRepository.create({ nombre });
@@ -21,13 +21,14 @@ export class CategoriasService {
   }
 
   async findOne(id: number): Promise<Categoria> {
-
-    const categoria = await this.categoriesRepository.findOne({ where: { id } });
+    const categoria = await this.categoriesRepository.findOne({
+      where: { id },
+    });
 
     if (!categoria) {
       throw new Error('Categegoria no encontrada');
     }
 
-    return categoria
+    return categoria;
   }
 }

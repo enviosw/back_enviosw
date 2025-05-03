@@ -1,4 +1,3 @@
 export class CreateRolDto {
-    nombre: string;
-  }
-  
+  nombre: string;
+}

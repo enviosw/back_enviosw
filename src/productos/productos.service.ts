@@ -13,7 +13,7 @@ export class ProductosService {
     private productosRepository: Repository<Producto>,
     @InjectRepository(Categoria)
     private categoriesRepository: Repository<Categoria>,
-  ) { }
+  ) {}
 
   async create(createProductoDto: CreateProductoDto): Promise<Producto> {
     // Buscar la categoría por su ID usando 'where' para pasar el objeto con el id
@@ -40,7 +40,10 @@ export class ProductosService {
   }
 
   findAllComercio(comercio_id: number): Promise<Producto[]> {
-    return this.productosRepository.find({where: {comercio: {id: comercio_id}}, relations: ['categoria'] });
+    return this.productosRepository.find({
+      where: { comercio: { id: comercio_id } },
+      relations: ['categoria'],
+    });
   }
 
   async findOne(id: number): Promise<Producto> {

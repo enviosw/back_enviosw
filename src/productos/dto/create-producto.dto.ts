@@ -11,16 +11,16 @@ export class CreateProductoDto {
   @IsNumber()
   readonly precio: number;
 
-  @IsOptional()  // Hacer el campo opcional
+  @IsOptional() // Hacer el campo opcional
   @IsNumber()
   readonly precio_descuento?: number;
 
-  @IsOptional()  // Hacer el campo opcional
-  @IsEnum(['activo', 'inactivo'])  // Validar que el estado sea "activo" o "inactivo"
+  @IsOptional() // Hacer el campo opcional
+  @IsEnum(['activo', 'inactivo']) // Validar que el estado sea "activo" o "inactivo"
   readonly estado?: string;
 
-  @IsOptional()  // Hacer el campo opcional
-  @IsEnum(['activo', 'inactivo'])  // Validar que el estado del descuento sea "activo" o "inactivo"
+  @IsOptional() // Hacer el campo opcional
+  @IsEnum(['activo', 'inactivo']) // Validar que el estado del descuento sea "activo" o "inactivo"
   readonly estado_descuento?: string;
 
   @IsString()

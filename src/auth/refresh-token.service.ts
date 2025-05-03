@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 
 interface StoredToken {
@@ -14,12 +14,12 @@ export class RefreshTokenService {
     const hashed = await bcrypt.hash(token, 10);
 
     // Reemplaza token existente del usuario
-    this.tokens = this.tokens.filter(t => t.userId !== userId);
+    this.tokens = this.tokens.filter((t) => t.userId !== userId);
     this.tokens.push({ userId, hashedToken: hashed });
   }
 
   async verify(userId: number, token: string): Promise<boolean> {
-    const entry = this.tokens.find(t => t.userId === userId);
+    const entry = this.tokens.find((t) => t.userId === userId);
     if (!entry) return false;
 
     const match = await bcrypt.compare(token, entry.hashedToken);
@@ -27,6 +27,6 @@ export class RefreshTokenService {
   }
 
   async remove(userId: number) {
-    this.tokens = this.tokens.filter(t => t.userId !== userId);
+    this.tokens = this.tokens.filter((t) => t.userId !== userId);
   }
 }

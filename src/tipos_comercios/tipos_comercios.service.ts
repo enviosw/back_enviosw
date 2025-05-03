@@ -10,7 +10,7 @@ export class TiposComerciosService {
   constructor(
     @InjectRepository(TipoComercio)
     private readonly tipoComercioRepo: Repository<TipoComercio>,
-  ) { }
+  ) {}
 
   async create(dto: CreateTiposComercioDto): Promise<TipoComercio> {
     const tipo = this.tipoComercioRepo.create(dto);
@@ -23,7 +23,8 @@ export class TiposComerciosService {
 
   async findOne(id: number): Promise<TipoComercio> {
     const tipo = await this.tipoComercioRepo.findOneBy({ id });
-    if (!tipo) throw new NotFoundException(`TipoComercio con ID ${id} no existe`);
+    if (!tipo)
+      throw new NotFoundException(`TipoComercio con ID ${id} no existe`);
     return tipo;
   }
 

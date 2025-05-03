@@ -1,4 +1,16 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, ParseIntPipe, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseInterceptors,
+  UploadedFile,
+  ParseIntPipe,
+  Query,
+} from '@nestjs/common';
 import { ComerciosService } from './comercios.service';
 import { CreateComercioDto } from './dto/create-comercio.dto';
 import { UpdateComercioDto } from './dto/update-comercio.dto';
@@ -11,43 +23,47 @@ export class ComerciosController {
   constructor(
     private readonly comerciosService: ComerciosService,
     private readonly fileUploadService: FileUploadService,
-  ) { }
+  ) {}
 
   // Crear un nuevo comercio y subir una imagen
   @Post()
-  @UseInterceptors(FileInterceptor('logo', { storage: FileUploadService.storage })) // 'logo' es el nombre del campo del formulario
-  async create(@Body() createComercioDto: CreateComercioDto, @UploadedFile() file: Express.Multer.File) {
+  @UseInterceptors(
+    FileInterceptor('logo', { storage: FileUploadService.storage }),
+  ) // 'logo' es el nombre del campo del formulario
+  async create(
+    @Body() createComercioDto: CreateComercioDto,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
     if (file) {
-      createComercioDto.logo_url = file.filename;  // Guardamos el nombre del archivo en la base de datos
+      createComercioDto.logo_url = file.filename; // Guardamos el nombre del archivo en la base de datos
     }
     return this.comerciosService.create(createComercioDto);
   }
 
-// comercios.controller.ts
-@Get()
-findAll(
-  @Query('page') page = 1,
-  @Query('search') search?: string,
-  @Query('estado') estado?: string,
-  @Query('fechaInicio') fechaInicio?: string,
-  @Query('fechaFin') fechaFin?: string,
-) {
-  return this.comerciosService.findAll({
-    page: +page,
-    search,
-    estado,
-    fechaInicio,
-    fechaFin,
-  });
-}
-
-
-
-  @Get('publicos')
-  async findAllComercios(@Query('servicio_id') servicioId: number): Promise<Comercio[]> {
-    return this.comerciosService.findComerciosByServicio(servicioId);
+  // comercios.controller.ts
+  @Get()
+  findAll(
+    @Query('page') page = 1,
+    @Query('search') search?: string,
+    @Query('estado') estado?: string,
+    @Query('fechaInicio') fechaInicio?: string,
+    @Query('fechaFin') fechaFin?: string,
+  ) {
+    return this.comerciosService.findAll({
+      page: +page,
+      search,
+      estado,
+      fechaInicio,
+      fechaFin,
+    });
   }
 
+  @Get('publicos')
+  async findAllComercios(
+    @Query('servicio_id') servicioId: number,
+  ): Promise<Comercio[]> {
+    return this.comerciosService.findComerciosByServicio(servicioId);
+  }
 
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
@@ -56,15 +72,16 @@ findAll(
 
   // Actualizar un comercio y su logo
   @Patch(':id')
-  @UseInterceptors(FileInterceptor('logo', { storage: FileUploadService.storage })) // 'logo' es el nombre del campo del formulario
+  @UseInterceptors(
+    FileInterceptor('logo', { storage: FileUploadService.storage }),
+  ) // 'logo' es el nombre del campo del formulario
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateComercioDto: UpdateComercioDto,
-    @UploadedFile() file: Express.Multer.File,  // Aquí se recibe el archivo
+    @UploadedFile() file: Express.Multer.File, // Aquí se recibe el archivo
   ) {
-
     if (file) {
-      updateComercioDto.logo_url = file.filename;  // Actualizamos el nombre del archivo
+      updateComercioDto.logo_url = file.filename; // Actualizamos el nombre del archivo
     }
     return this.comerciosService.update(id, updateComercioDto);
   }

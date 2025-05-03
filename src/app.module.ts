@@ -10,11 +10,18 @@ import { FileUploadModule } from './common/file-upload.module';
 import { ServiciosModule } from './servicios/servicios.module';
 import { CategoriasModule } from './categorias/categorias.module';
 import { ProductosModule } from './productos/productos.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+    }),
+
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', '..', 'uploads'), // acceso físico
+      serveRoot: '/', // acceso público desde la URL
     }),
 
     TypeOrmModule.forRootAsync({
@@ -48,7 +55,7 @@ import { ProductosModule } from './productos/productos.module';
 
     CategoriasModule,
 
-    ProductosModule, 
+    ProductosModule,
   ],
 })
-export class AppModule { }
+export class AppModule {}

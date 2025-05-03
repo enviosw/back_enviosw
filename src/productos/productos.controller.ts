@@ -5,10 +5,22 @@ import { Producto } from './entities/producto.entity';
 
 @Controller('productos')
 export class ProductosController {
-  constructor(private readonly productosService: ProductosService) { }
+  constructor(private readonly productosService: ProductosService) {}
 
   @Post()
-  create(@Body() createProductoDto: { nombre: string; descripcion: string; categoriaId: number; precio: number; precio_descuento?: number; estado?: string; estado_descuento?: string; unidad: string }): Promise<Producto> {
+  create(
+    @Body()
+    createProductoDto: {
+      nombre: string;
+      descripcion: string;
+      categoriaId: number;
+      precio: number;
+      precio_descuento?: number;
+      estado?: string;
+      estado_descuento?: string;
+      unidad: string;
+    },
+  ): Promise<Producto> {
     return this.productosService.create(createProductoDto);
   }
 
@@ -17,9 +29,10 @@ export class ProductosController {
     return this.productosService.findAll();
   }
 
-
   @Get('comercio')
-  async findAllComercios(@Query('comercio_id') comercio_id: number): Promise<Producto[]> {
+  async findAllComercios(
+    @Query('comercio_id') comercio_id: number,
+  ): Promise<Producto[]> {
     return this.productosService.findAllComercio(comercio_id);
   }
 

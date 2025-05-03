@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Param, Delete, Patch } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Delete,
+  Patch,
+} from '@nestjs/common';
 import { ServiciosService } from './servicios.service';
 import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
@@ -9,7 +17,9 @@ export class ServiciosController {
   constructor(private readonly serviciosService: ServiciosService) {}
 
   @Post()
-  async create(@Body() createServicioDto: CreateServicioDto): Promise<Servicio> {
+  async create(
+    @Body() createServicioDto: CreateServicioDto,
+  ): Promise<Servicio> {
     return this.serviciosService.create(createServicioDto);
   }
 

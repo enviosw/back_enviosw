@@ -1,5 +1,5 @@
 // src/tipos-comercio/entities/tipo-comercio.entity.ts
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 // import { Comercio } from '../../comercios/entities/comercio.entity';
 
 @Entity('tipos_comercio')

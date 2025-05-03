@@ -4,19 +4,11 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { UsuariosModule } from 'src/usuarios/usuarios.module';
-import { jwtConstants } from './constants/jwt.constant';
 import { RefreshTokenService } from './refresh-token.service';
 
 @Module({
-  imports: [
-    UsuariosModule,
-    JwtModule.register({}),
-  ],
+  imports: [UsuariosModule, JwtModule.register({})],
   controllers: [AuthController],
-  providers: [
-    AuthService,
-    JwtStrategy,
-    RefreshTokenService,
-  ],
+  providers: [AuthService, JwtStrategy, RefreshTokenService],
 })
 export class AuthModule {}

@@ -11,14 +11,16 @@ export class ComerciosService {
   constructor(
     @InjectRepository(Comercio)
     private readonly comercioRepo: Repository<Comercio>,
-  ) { }
+  ) {}
 
   // Crear un nuevo comercio
   async create(dto: CreateComercioDto): Promise<Comercio> {
+    const comercio = this.comercioRepo.create({
+      ...dto,
+      servicio: { id: dto.servicio_id, estado: 'activo' },
+    });
 
-    const comercio = this.comercioRepo.create({ ...dto, servicio: { id: dto.servicio_id, estado: 'activo' } });
-
-    console.log(comercio)
+    console.log(comercio);
     return await this.comercioRepo.save(comercio);
   }
 
@@ -27,9 +29,9 @@ export class ComerciosService {
     const take = 20;
     const skip = (query.page - 1) * take;
 
-    const qb = this.comercioRepo.createQueryBuilder('comercio')
+    const qb = this.comercioRepo
+      .createQueryBuilder('comercio')
       .leftJoinAndSelect('comercio.servicio', 'servicio'); // ⬅️ Aquí se une la relación
-
 
     if (query.search) {
       const palabras = query.search.trim().split(/\s+/);
@@ -48,11 +50,10 @@ export class ComerciosService {
             comercio.telefono_secundario ILIKE :${param} OR 
             comercio.direccion ILIKE :${param}
           )`,
-          { [param]: `%${palabra}%` }
+          { [param]: `%${palabra}%` },
         );
       });
     }
-
 
     if (query.estado) {
       qb.andWhere('comercio.estado = :estado', { estado: query.estado });
@@ -88,13 +89,11 @@ export class ComerciosService {
 
   // Actualizar un comercio
   async update(id: number, dto: UpdateComercioDto): Promise<Comercio> {
-
     const comercio = await this.comercioRepo.findOne({ where: { id } });
 
     if (!comercio) {
       throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
     }
-
 
     Object.assign(comercio, {
       ...dto,
@@ -104,18 +103,16 @@ export class ComerciosService {
     return await this.comercioRepo.save(comercio);
   }
 
-
   // Eliminar un comercio
   async remove(id: number): Promise<void> {
     const comercio = await this.findOne(id);
     await this.comercioRepo.remove(comercio);
   }
 
-
   async findComerciosByServicio(servicioId: number): Promise<Comercio[]> {
     return await this.comercioRepo.find({
       where: {
-        servicio: { id: servicioId } // Filtrar comercios donde el servicio es igual al servicioId proporcionado
+        servicio: { id: servicioId }, // Filtrar comercios donde el servicio es igual al servicioId proporcionado
       },
       select: [
         'id',
@@ -133,6 +130,4 @@ export class ComerciosService {
       ],
     });
   }
-
-
 }

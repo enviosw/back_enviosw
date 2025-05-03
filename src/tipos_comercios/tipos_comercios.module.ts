@@ -9,4 +9,4 @@ import { TipoComercio } from './entities/tipos_comercio.entity';
   controllers: [TiposComerciosController],
   providers: [TiposComerciosService],
 })
-export class TiposComerciosModule { }
+export class TiposComerciosModule {}
