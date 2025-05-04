@@ -15,7 +15,7 @@ import { ComerciosService } from './comercios.service';
 import { CreateComercioDto } from './dto/create-comercio.dto';
 import { UpdateComercioDto } from './dto/update-comercio.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { FileUploadService } from 'src/common/file-upload.service'; // Importar el servicio de subida
+import { FileUploadService } from '../common/file-upload.service'; // Importar el servicio de subida
 import { Comercio } from './entities/comercio.entity';
 
 @Controller('comercios')

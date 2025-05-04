@@ -1,7 +1,7 @@
 // src/productos/entities/producto.entity.ts
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
-import { Categoria } from 'src/categorias/entities/categoria.entity';
-import { Comercio } from 'src/comercios/entities/comercio.entity';
+import { Categoria } from '../../categorias/entities/categoria.entity';
+import { Comercio } from '../../comercios/entities/comercio.entity';
 
 @Entity('productos')
 export class Producto {

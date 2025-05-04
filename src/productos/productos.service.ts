@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Producto } from './entities/producto.entity';
-import { Categoria } from 'src/categorias/entities/categoria.entity';
+import { Categoria } from '../categorias/entities/categoria.entity';
 import { CreateProductoDto } from './dto/create-producto.dto';
 
 @Injectable()

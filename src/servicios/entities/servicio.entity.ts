@@ -1,4 +1,4 @@
-import { Comercio } from 'src/comercios/entities/comercio.entity';
+import { Comercio } from '../../comercios/entities/comercio.entity';
 import {
   Entity,
   Column,

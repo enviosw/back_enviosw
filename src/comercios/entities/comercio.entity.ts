@@ -1,5 +1,5 @@
-import { Producto } from 'src/productos/entities/producto.entity';
-import { Servicio } from 'src/servicios/entities/servicio.entity';
+import { Producto } from '../../productos/entities/producto.entity';
+import { Servicio } from '../../servicios/entities/servicio.entity';
 import {
   Entity,
   Column,
