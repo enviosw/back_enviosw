@@ -1,5 +1,5 @@
-// src/productos/dto/create-producto.dto.ts
 import { IsString, IsNumber, IsOptional, IsEnum } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateProductoDto {
   @IsString()
@@ -8,27 +8,36 @@ export class CreateProductoDto {
   @IsString()
   readonly descripcion: string;
 
+  @Transform(({ value }) => Number(value))
   @IsNumber()
   readonly precio: number;
 
-  @IsOptional() // Hacer el campo opcional
+  @IsOptional()
+  @Transform(({ value }) =>
+    value !== undefined && value !== null && value !== '' ? Number(value) : undefined,
+  )
   @IsNumber()
   readonly precio_descuento?: number;
 
-  @IsOptional() // Hacer el campo opcional
-  @IsEnum(['activo', 'inactivo']) // Validar que el estado sea "activo" o "inactivo"
+  @IsOptional()
+  @IsEnum(['activo', 'inactivo'])
   readonly estado?: string;
 
-  @IsOptional() // Hacer el campo opcional
-  @IsEnum(['activo', 'inactivo']) // Validar que el estado del descuento sea "activo" o "inactivo"
+  @IsOptional()
+  @IsEnum(['activo', 'inactivo'])
   readonly estado_descuento?: string;
 
   @IsString()
   readonly unidad: string;
 
+  @Transform(({ value }) => Number(value))
   @IsNumber()
-  readonly categoriaId: number; // ID de la categoría asociada al producto
+  readonly categoriaId: number;
 
+  @Transform(({ value }) => Number(value))
   @IsNumber()
-  readonly comercioId: number; // ID del comercio con el que se asocia el producto
+  readonly comercioId: number;
+
+  @IsOptional()
+  imagen_url?: string; // nombre del archivo
 }

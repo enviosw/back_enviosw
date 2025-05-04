@@ -35,7 +35,7 @@ import { join } from 'path';
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: false,
       }),
     }),
 
@@ -58,4 +58,4 @@ import { join } from 'path';
     ProductosModule,
   ],
 })
-export class AppModule {}
+export class AppModule { }

@@ -34,6 +34,8 @@ export class Producto {
 
   @Column()
   unidad: string;
+  @Column({ nullable: true })
+  imagen_url: string;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   fecha_creacion: Date;

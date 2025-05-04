@@ -47,10 +47,14 @@ export class AuthService {
   }
 
   async login({ email, password }: LoginDto) {
+
     const user = await this.usuariosService.findOneByEmail(email);
     if (!user || !(await bcrypt.compare(password, user.password))) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
+    
+    const comercioId =  user.comercio?.id ?? null
+
   
     // Incluye el campo nombre en el payload
     const payload = { sub: user.id, email: user.email, rol: user.rol, nombre: user.nombre };
@@ -79,6 +83,7 @@ export class AuthService {
         nombre: user.nombre, // Asegúrate de incluir 'nombre'
         rol: user.rol,
       },
+      comercio: comercioId
     };
   }
   

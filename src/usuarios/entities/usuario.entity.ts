@@ -1,9 +1,14 @@
+import { Comercio } from '../../comercios/entities/comercio.entity';
 import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  ManyToMany,
+  JoinTable,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 
 @Entity('usuarios')
@@ -31,4 +36,8 @@ export class Usuario {
 
   @UpdateDateColumn({ name: 'fecha_actualizacion' })
   fecha_actualizacion: Date;
+
+  @ManyToOne(() => Comercio, (comercio) => comercio.usuarios, { nullable: true })
+  @JoinColumn({ name: 'comercio_id' })
+  comercio: Comercio;
 }

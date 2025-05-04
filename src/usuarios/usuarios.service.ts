@@ -79,8 +79,12 @@ export class UsuariosService {
 
   // Obtener un usuario por su email
   async findOneByEmail(email: string) {
-    return await this.usuarioRepository.findOneBy({ email });
+    return this.usuarioRepository.findOne({
+      where: { email },
+      relations: ['comercio'], // <-- incluye la relación
+    });
   }
+
 
   // Actualizar un usuario
   async update(id: number, updateUsuarioDto: UpdateUsuarioDto): Promise<Usuario> {

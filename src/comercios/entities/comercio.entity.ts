@@ -1,4 +1,4 @@
-import { Categoria } from 'src/categorias/entities/categoria.entity';
+import { Categoria } from '../../categorias/entities/categoria.entity';
 import { Producto } from '../../productos/entities/producto.entity';
 import { Servicio } from '../../servicios/entities/servicio.entity';
 import {
@@ -10,7 +10,9 @@ import {
   ManyToOne,
   JoinColumn,
   OneToMany,
+  ManyToMany,
 } from 'typeorm';
+import { Usuario } from '../../usuarios/entities/usuario.entity';
 
 @Entity('comercios')
 export class Comercio {
@@ -66,4 +68,8 @@ export class Comercio {
 
   @OneToMany(() => Categoria, (categoria) => categoria.comercio)
   categorias: Categoria[];
+
+  // Relación Muchos a Muchos con Usuario
+  @OneToMany(() => Usuario, (usuario) => usuario.comercio)
+  usuarios: Usuario[];
 }
