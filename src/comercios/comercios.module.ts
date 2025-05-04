@@ -8,5 +8,6 @@ import { Comercio } from './entities/comercio.entity';
   imports: [TypeOrmModule.forFeature([Comercio])],
   controllers: [ComerciosController],
   providers: [ComerciosService],
+  exports: [ComerciosService], 
 })
 export class ComerciosModule {}

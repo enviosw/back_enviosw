@@ -28,4 +28,7 @@ export class CreateProductoDto {
 
   @IsNumber()
   readonly categoriaId: number; // ID de la categoría asociada al producto
+
+  @IsNumber()
+  readonly comercioId: number; // ID del comercio con el que se asocia el producto
 }

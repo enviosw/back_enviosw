@@ -59,7 +59,7 @@ async function seedUsuarios(app) {
     const serviciosData = [
       { nombre: 'Restaurantes', estado: 'activo', icon: 'FaUtensils', color: '#2B7FFF' },
       { nombre: 'Detalles', estado: 'activo', icon: 'FaGift', color: '#00C950' },
-      { nombre: 'Droguerías', estado: 'activo', icon: 'FaPills', color: '#FOB100' },
+      { nombre: 'Droguerías', estado: 'activo', icon: 'FaPills', color: '#F0B100' },
       { nombre: 'Almacenes', estado: 'activo', icon: 'FaWarehouse', color: '#AD46FF' },
       { nombre: 'Recogidas', estado: 'inactivo', icon: 'FaTruck', color: '#FB2C36' },
       { nombre: 'Compras', estado: 'inactivo', icon: 'FaShoppingCart', color: '#FF6900' },

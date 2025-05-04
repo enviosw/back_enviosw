@@ -1,3 +1,4 @@
+import { Categoria } from 'src/categorias/entities/categoria.entity';
 import { Producto } from '../../productos/entities/producto.entity';
 import { Servicio } from '../../servicios/entities/servicio.entity';
 import {
@@ -62,4 +63,7 @@ export class Comercio {
 
   @OneToMany(() => Producto, (producto) => producto.comercio) // Relación con Producto
   productos: Producto[]; // Esta es la propiedad que permite acceder a los productos de un comercio
+
+  @OneToMany(() => Categoria, (categoria) => categoria.comercio)
+  categorias: Categoria[];
 }

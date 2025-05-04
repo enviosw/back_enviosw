@@ -1,24 +1,34 @@
 // src/categories/categories.controller.ts
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param } from '@nestjs/common';
 import { CategoriasService } from './categorias.service';
+import { CreateCategoriaDto } from './dto/create-categoria.dto';
 import { Categoria } from './entities/categoria.entity';
 
-@Controller('categories')
+@Controller('categorias')
 export class CategoriasController {
-  constructor(private readonly categoriesService: CategoriasService) {}
+  constructor(private readonly categoriasService: CategoriasService) {}
 
+  // Crear una categoría
   @Post()
-  create(@Body() createCategoryDto: { nombre: string }): Promise<Categoria> {
-    return this.categoriesService.create(createCategoryDto.nombre);
+  async create(@Body() createCategoriaDto: CreateCategoriaDto): Promise<Categoria> {
+    return this.categoriasService.create(createCategoriaDto);
   }
 
+  // Listar categorías de un comercio específico
+  @Get('comercio/:comercioId')
+  async findByComercio(@Param('comercioId') comercioId: number): Promise<Categoria[]> {
+    return this.categoriasService.findByComercio(comercioId);
+  }
+
+  // Obtener todas las categorías
   @Get()
-  findAll(): Promise<Categoria[]> {
-    return this.categoriesService.findAll();
+  async findAll(): Promise<Categoria[]> {
+    return this.categoriasService.findAll();
   }
 
+  // Obtener una categoría por ID
   @Get(':id')
-  findOne(@Param('id') id: string): Promise<Categoria> {
-    return this.categoriesService.findOne(+id);
+  async findOne(@Param('id') id: number): Promise<Categoria> {
+    return this.categoriasService.findOne(id);
   }
 }

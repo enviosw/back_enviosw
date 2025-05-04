@@ -51,54 +51,63 @@ export class AuthService {
     if (!user || !(await bcrypt.compare(password, user.password))) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
-
-    const payload = { sub: user.id, email: user.email, rol: user.rol };
-
+  
+    // Incluye el campo nombre en el payload
+    const payload = { sub: user.id, email: user.email, rol: user.rol, nombre: user.nombre };
+  
+    // Generación de los tokens con el nuevo payload
     const access_token = await this.jwtService.signAsync(payload, {
       secret: jwtConstants.accessTokenSecret,
       expiresIn: jwtConstants.accessTokenExpiration,
     });
-
+  
     const refresh_token = await this.jwtService.signAsync(payload, {
       secret: jwtConstants.refreshTokenSecret,
       expiresIn: jwtConstants.refreshTokenExpiration,
     });
-
+  
+    // Guarda el refresh token
     await this.refreshTokenService.save(user.id, refresh_token);
-
+  
+    // Devuelve la respuesta con el token y los datos del usuario, incluyendo el nombre
     return {
       access_token,
       refresh_token,
       user: {
         id: user.id,
         email: user.email,
-        nombre: user.nombre,
+        nombre: user.nombre, // Asegúrate de incluir 'nombre'
         rol: user.rol,
       },
     };
   }
+  
 
   async refresh(userId: number, refreshToken: string) {
     const isValid = await this.refreshTokenService.verify(userId, refreshToken);
     if (!isValid) throw new ForbiddenException('Token inválido o expirado');
-
+  
     const user = await this.usuariosService.findOne(userId);
-
+  
+    // Genera el nuevo payload incluyendo 'nombre'
     const payload = {
       sub: user.id,
       email: user.email,
       rol: user.rol,
+      nombre: user.nombre, // Asegúrate de incluir 'nombre' aquí también
     };
-
+  
     const newAccessToken = await this.jwtService.signAsync(payload, {
       secret: jwtConstants.accessTokenSecret,
       expiresIn: jwtConstants.accessTokenExpiration,
     });
-
+  
+    // Devuelve el nuevo token de acceso
     return {
       access_token: newAccessToken,
     };
   }
+  
 
   async logout(userId: number) {
     await this.refreshTokenService.remove(userId);
