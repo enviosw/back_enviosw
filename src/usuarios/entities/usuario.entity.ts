@@ -23,7 +23,7 @@ export class Usuario {
   @Column({ name: 'rol', default: 'usuario' })
   rol: string;
 
-  @Column({ name: 'estado', default: true })
+  @Column({ name: 'estado', default: 'activo' })
   estado: string;
 
   @CreateDateColumn({ name: 'fecha_creacion' })
