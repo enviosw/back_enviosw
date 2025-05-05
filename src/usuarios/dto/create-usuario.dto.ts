@@ -1,4 +1,4 @@
-import { IsString, IsEmail, MinLength, IsOptional } from 'class-validator';
+import { IsString, IsEmail, MinLength, IsOptional, IsNumber } from 'class-validator';
 
 export class CreateUsuarioDto {
   @IsString()
@@ -17,4 +17,8 @@ export class CreateUsuarioDto {
 
   @IsOptional()
   readonly estado?: string;
+
+  @IsOptional()
+  @IsNumber()
+  readonly comercio_id?: number; // 👈 agrega esto
 }

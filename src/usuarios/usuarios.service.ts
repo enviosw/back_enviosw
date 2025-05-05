@@ -15,9 +15,17 @@ export class UsuariosService {
 
   // Crear un nuevo usuario
   async create(createUsuarioDto: CreateUsuarioDto): Promise<Usuario> {
-    const nuevoUsuario = this.usuarioRepository.create(createUsuarioDto);
+    const { comercio_id, ...resto } = createUsuarioDto;
+  
+    const nuevoUsuario = this.usuarioRepository.create(resto);
+  
+    if (comercio_id) {
+      nuevoUsuario.comercio = { id: comercio_id } as any; // Solo enlaza por ID sin cargar todo el comercio
+    }
+  
     return await this.usuarioRepository.save(nuevoUsuario);
   }
+  
 
   // Obtener todos los usuarios con filtros y paginación
   async findAll(query: UsuarioQuery) {
@@ -86,13 +94,20 @@ export class UsuariosService {
   }
 
 
-  // Actualizar un usuario
+// Actualizar un usuario
   async update(id: number, updateUsuarioDto: UpdateUsuarioDto): Promise<Usuario> {
     const usuario = await this.findOne(id);
-    const actualizado = this.usuarioRepository.merge(usuario, updateUsuarioDto);
+    const { comercio_id, ...resto } = updateUsuarioDto;
+  
+    const actualizado = this.usuarioRepository.merge(usuario, resto);
+  
+    if (comercio_id !== undefined) {
+      actualizado.comercio = { id: comercio_id } as any;
+    }
+  
     return await this.usuarioRepository.save(actualizado);
   }
-
+  
   // Eliminar un usuario
   async remove(id: number): Promise<void> {
     const usuario = await this.findOne(id);

@@ -23,7 +23,7 @@ export class ComerciosController {
   constructor(
     private readonly comerciosService: ComerciosService,
     private readonly fileUploadService: FileUploadService,
-  ) {}
+  ) { }
 
   // Crear un nuevo comercio y subir una imagen
   @Post()
@@ -63,6 +63,11 @@ export class ComerciosController {
     @Query('servicio_id') servicioId: number,
   ): Promise<Comercio[]> {
     return this.comerciosService.findComerciosByServicio(servicioId);
+  }
+
+  @Get('search')
+  async searchAll(@Query('search') search: string) {
+    return this.comerciosService.searchAll(search);
   }
 
   @Get(':id')

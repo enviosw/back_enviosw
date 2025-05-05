@@ -24,6 +24,40 @@ export class ComerciosService {
     return await this.comercioRepo.save(comercio);
   }
 
+  async searchAll(search: string) {
+    const qb = this.comercioRepo
+      .createQueryBuilder('comercio')
+      .leftJoinAndSelect('comercio.servicio', 'servicio');
+  
+    if (search) {
+      const palabras = search.trim().split(/\s+/);
+  
+      palabras.forEach((palabra, index) => {
+        const param = `palabra${index}`;
+        qb.andWhere(
+          `(
+            comercio.nombre_comercial ILIKE :${param} OR 
+            comercio.razon_social ILIKE :${param} OR 
+            comercio.nit ILIKE :${param} OR 
+            comercio.descripcion ILIKE :${param} OR 
+            comercio.responsable ILIKE :${param} OR 
+            comercio.email_contacto ILIKE :${param} OR 
+            comercio.telefono ILIKE :${param} OR 
+            comercio.telefono_secundario ILIKE :${param} OR 
+            comercio.direccion ILIKE :${param}
+          )`,
+          { [param]: `%${palabra}%` },
+        );
+      });
+    }
+  
+    qb.orderBy('comercio.fecha_creacion', 'DESC');
+  
+    const resultados = await qb.getMany();
+    return resultados;
+  }
+  
+
   // Obtener todos los comercios
   async findAll(query: ComercioQuery) {
     const take = 20;
