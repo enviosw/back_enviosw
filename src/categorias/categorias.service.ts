@@ -55,4 +55,21 @@ export class CategoriasService {
 
     return categoria;
   }
+
+
+  async update(id: number, updateCategoriaDto: { nombre: string }): Promise<Categoria> {
+    const categoria = await this.findOne(id); // Verificar que la categoría existe
+
+    categoria.nombre = updateCategoriaDto.nombre; // Solo actualizamos el nombre
+
+    return this.categoriesRepository.save(categoria); // Guardar los cambios
+  }
+
+    // Eliminar una categoría sin eliminar los productos
+    async remove(id: number): Promise<void> {
+      const categoria = await this.findOne(id); // Verificar que la categoría existe
+  
+      await this.categoriesRepository.remove(categoria); // Eliminar la categoría
+    }
+    
 }

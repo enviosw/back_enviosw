@@ -1,5 +1,5 @@
 // src/categories/categories.controller.ts
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Patch, Delete } from '@nestjs/common';
 import { CategoriasService } from './categorias.service';
 import { CreateCategoriaDto } from './dto/create-categoria.dto';
 import { Categoria } from './entities/categoria.entity';
@@ -30,5 +30,15 @@ export class CategoriasController {
   @Get(':id')
   async findOne(@Param('id') id: number): Promise<Categoria> {
     return this.categoriasService.findOne(id);
+  }
+
+  @Patch(':id')
+  async update(@Param('id') id: number, @Body() updateCategoriaDto: { nombre: string }): Promise<Categoria> {
+    return this.categoriasService.update(id, updateCategoriaDto);
+  }
+
+  @Delete(':id')
+  async remove(@Param('id') id: number): Promise<void> {
+    return this.categoriasService.remove(id);
   }
 }

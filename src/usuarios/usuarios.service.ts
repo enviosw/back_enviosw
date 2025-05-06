@@ -44,12 +44,15 @@ export class UsuariosService {
             usuario.nombre ILIKE :${param} OR
             usuario.email ILIKE :${param} OR
             usuario.rol ILIKE :${param} OR
-            usuario.estado ILIKE :${param}
+            usuario.estado ILIKE :${param} OR
+            usuario.telefono ILIKE :${param} OR
+            usuario.direccion ILIKE :${param}
           )`,
           { [param]: `%${palabra}%` },
         );
       });
     }
+    
 
     // Filtro por estado
     if (query.estado) {

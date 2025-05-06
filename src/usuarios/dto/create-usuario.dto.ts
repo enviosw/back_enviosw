@@ -21,4 +21,12 @@ export class CreateUsuarioDto {
   @IsOptional()
   @IsNumber()
   readonly comercio_id?: number; // 👈 agrega esto
+
+  @IsString()
+  @IsOptional()
+  readonly telefono?: string;
+
+  @IsString()
+  @IsOptional()
+  readonly direccion?: string;
 }
