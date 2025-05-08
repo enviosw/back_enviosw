@@ -4,8 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Brackets } from 'typeorm';
 import { Producto } from './entities/producto.entity';
 import { CreateProductoDto } from './dto/create-producto.dto';
-import { ComerciosService } from 'src/comercios/comercios.service';
-import { CategoriasService } from 'src/categorias/categorias.service';
+import { ComerciosService } from '../comercios/comercios.service';
+import { CategoriasService } from '../categorias/categorias.service';
 import { ProductoQuery } from './interfaces/producto-query.interface';
 
 @Injectable()
