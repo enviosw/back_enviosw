@@ -3,8 +3,8 @@ import { AppModule } from '../app.module';
 import { UsuariosService } from '../usuarios/usuarios.service';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
-import { ServiciosService } from 'src/servicios/servicios.service';
-import { RolesService } from 'src/roles/roles.service';
+import { ServiciosService } from '../servicios/servicios.service';
+import { RolesService } from '../roles/roles.service';
 
 // importa más servicios si necesitas (ej: RoleService)
 
