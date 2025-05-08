@@ -11,35 +11,53 @@ import { RegisterDto } from './dto/registrar-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenService } from './refresh-token.service';
 import { jwtConstants } from './constants/jwt.constant';
+import { ClientesService } from 'src/clientes/clientes.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly usuariosService: UsuariosService,
+    private readonly clientesService: ClientesService,
     private readonly jwtService: JwtService,
     private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   async register(registerDto: RegisterDto) {
-    const { email, password, nombre } = registerDto;
+    const { email, password, rol, nombre } = registerDto;
 
     const userExists = await this.usuariosService.findOneByEmail(email);
     if (userExists) {
       throw new BadRequestException('El correo ya está registrado.');
     }
 
+    const clienteExists = await this.clientesService.findOneByEmail(email);
+    if (clienteExists) {
+      throw new BadRequestException('El correo ya está registrado.');
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await this.usuariosService.create({
+    const user =(rol.toLocaleLowerCase() !== 'cliente') ? await this.usuariosService.create({
       nombre,
       email,
       password: hashedPassword,
-      rol: 'cliente',
+      rol: 'aliado',
+    }) : await this.clientesService.create({
+      name: registerDto.nombre,
+      lastName: registerDto.apellido || '',
+      address: registerDto.direccion || '',
+      phone: registerDto.telefono || '',
+      phone_2: registerDto.telefono2 || '',
+      status: 'activo',
+      email,
+      password: hashedPassword,
+      rol: 'cliente', 
     });
 
     // Elimina el campo password si lo contiene
     const { password: _, ...userWithoutPassword } = user;
 
+  
     return {
       message: 'Usuario creado con éxito',
       user: userWithoutPassword,

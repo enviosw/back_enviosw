@@ -109,6 +109,7 @@ async function seedRoles(app) {
   const rolesData = [
     { nombre: 'administrador' },
     { nombre: 'aliado' },
+    { nombre: 'cliente' },
   ];
 
   for (const rol of rolesData) {
