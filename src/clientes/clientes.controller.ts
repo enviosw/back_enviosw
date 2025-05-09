@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { ClientesService } from './clientes.service';
 import { CreateClienteDto } from './dto/create-cliente.dto';
 import { UpdateClienteDto } from './dto/update-cliente.dto';
+import { ClienteQuery } from './interfaces/cliente.interface';
 
 @Controller('clientes')
 export class ClientesController {
@@ -13,8 +14,8 @@ export class ClientesController {
   }
 
   @Get()
-  findAll() {
-    return this.clientesService.findAll();
+  findAll(@Query() query: ClienteQuery) {
+    return this.clientesService.findAll(query);
   }
 
   @Get(':id')
