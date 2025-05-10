@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsString, Length } from "class-validator";
+import { IsEmail, IsNotEmpty, IsNumber, IsString, Length } from "class-validator";
 
 
 
@@ -43,9 +43,9 @@ export class CreateClienteDto {
     @Length(3, 20)
     status: string;
 
-    @IsString()
+    @IsNumber()
     @IsNotEmpty({ message: 'El rol es obligatorio' })
     @Length(3, 20)
-    rol: string;
+    rol_id: number;
 
 }

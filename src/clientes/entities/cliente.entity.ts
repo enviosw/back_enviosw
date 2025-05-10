@@ -37,8 +37,11 @@ export class Cliente {
     @UpdateDateColumn({ name: 'fecha_actualizacion' })
     fecha_actualizacion: Date;
 
-    @ManyToOne(() => Rol, (rol) => rol.clientes, {nullable: true} )
+    @ManyToOne(() => Rol, (rol) => rol.clientes, {nullable: false} )
     @JoinColumn({ name: 'rol_id'})
     rol: Rol;
+
+    @Column({ name: 'rol_id' })
+    rol_id: number;
 
 }

@@ -51,7 +51,7 @@ export class AuthService {
       status: 'activo',
       email,
       password: hashedPassword,
-      rol: 'cliente', 
+      rol_id: 3, 
     });
 
     // Elimina el campo password si lo contiene
