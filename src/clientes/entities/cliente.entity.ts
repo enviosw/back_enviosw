@@ -43,5 +43,4 @@ export class Cliente {
 
     @Column({ name: 'rol_id' })
     rol_id: number;
-
 }
