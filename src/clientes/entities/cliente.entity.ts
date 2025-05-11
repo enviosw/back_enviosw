@@ -41,6 +41,6 @@ export class Cliente {
     @JoinColumn({ name: 'rol_id'})
     rol: Rol;
 
-    @Column({ name: 'rol_id' })
+    @Column()
     rol_id: number;
 }

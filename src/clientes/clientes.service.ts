@@ -34,10 +34,7 @@ export class ClientesService {
 
     const clientes = this.clienteRepository.createQueryBuilder('cliente');
 
-    // copilot necesito que me traiga tambien el rol
-    clientes.leftJoinAndSelect('cliente.rol', 'rol');
-    // clientes.addSelect('rol.name', 'rol_name');
-    clientes.addSelect('rol.id', 'rol_id');
+    // clientes.leftJoinAndSelect('cliente.rol', 'rol');
 
     // Filtro de búsqueda
     if (query.search) {
@@ -50,7 +47,7 @@ export class ClientesService {
               cliente.lastName ILIKE :${param} OR
               cliente.email ILIKE :${param} OR
               cliente.rol ILIKE :${param} OR
-              cliente.state ILIKE :${param} OR
+              cliente.status ILIKE :${param} OR
               cliente.phone ILIKE :${param} OR
               cliente.phone_2 ILIKE :${param} OR
               cliente.address ILIKE :${param}
@@ -111,6 +108,7 @@ export class ClientesService {
   }
 
   async update(id: number, updateClienteDto: UpdateClienteDto) {
+    
     const { rol_id, ...resto } = updateClienteDto;
 
     const cliente = await this.clienteRepository.findOneBy({ id });
