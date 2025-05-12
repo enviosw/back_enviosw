@@ -11,7 +11,7 @@ import { RegisterDto } from './dto/registrar-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenService } from './refresh-token.service';
 import { jwtConstants } from './constants/jwt.constant';
-import { ClientesService } from 'src/clientes/clientes.service';
+import { ClientesService } from '../clientes/clientes.service';
 
 @Injectable()
 export class AuthService {
