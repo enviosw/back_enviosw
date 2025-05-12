@@ -52,6 +52,32 @@ export class Comercio {
   @Column({ default: true })
   estado: string;
 
+    // Nueva columna para horarios (almacena datos JSON)
+  @Column('jsonb', { nullable: true, 
+    default: {
+      lunes: { apertura: '07:00 AM', cierre: '04:30 PM' },
+      martes: { apertura: '07:00 AM', cierre: '04:30 PM' },
+      miercoles: { apertura: '07:00 AM', cierre: '04:30 PM' },
+      jueves: { apertura: '07:00 AM', cierre: '04:30 PM' },
+      viernes: { apertura: '07:00 AM', cierre: '04:30 PM' },
+      sabado: { apertura: '07:00 AM', cierre: '04:30 PM' },
+      domingo: { apertura: '07:00 AM', cierre: '09:00 PM' },
+    } 
+  })
+  horarios: {
+    lunes: { apertura: string, cierre: string };
+    martes: { apertura: string, cierre: string };
+    miercoles: { apertura: string, cierre: string };
+    jueves: { apertura: string, cierre: string };
+    viernes: { apertura: string, cierre: string };
+    sabado: { apertura: string, cierre: string };
+    domingo: { apertura: string, cierre: string };
+  };
+
+  // Columna para el estado del comercio (abierto o cerrado)
+  @Column({ type: 'boolean', default: true })
+  estado_comercio: boolean; // true = abierto, false = cerrado
+
   @CreateDateColumn({ name: 'fecha_creacion' })
   fecha_creacion: Date;
 

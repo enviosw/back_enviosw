@@ -61,8 +61,10 @@ export class ComerciosController {
   @Get('publicos')
   async findAllComercios(
     @Query('servicio_id') servicioId: number,
-  ): Promise<Comercio[]> {
-    return this.comerciosService.findComerciosByServicio(servicioId);
+    @Query('search') search?: string,
+    @Query('page') page: number = 1,
+  ) {
+    return this.comerciosService.findComerciosByServicio(servicioId, search, page);
   }
 
   @Get('search')
@@ -95,5 +97,21 @@ export class ComerciosController {
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.comerciosService.remove(id);
+  }
+
+
+  // Obtener los horarios de un comercio por su ID
+  @Get(':id/horarios')
+  async getHorarios(@Param('id', ParseIntPipe) id: number) {
+    return this.comerciosService.getHorariosByComercio(id);
+  }
+
+  // Actualizar los horarios de un comercio por su ID
+  @Patch(':id/horarios')
+  async updateHorarios(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() horarios: any, // Se espera un objeto con los horarios a actualizar
+  ) {
+    return this.comerciosService.updateHorarios(id, horarios);
   }
 }
