@@ -46,7 +46,6 @@ export class ClientesService {
               cliente.name ILIKE :${param} OR
               cliente.lastName ILIKE :${param} OR
               cliente.email ILIKE :${param} OR
-              cliente.rol ILIKE :${param} OR
               cliente.status ILIKE :${param} OR
               cliente.phone ILIKE :${param} OR
               cliente.phone_2 ILIKE :${param} OR
