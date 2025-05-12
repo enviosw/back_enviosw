@@ -21,8 +21,9 @@ import { ClientesModule } from './clientes/clientes.module';
     }),
 
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', '..', 'uploads'), // acceso físico
-      serveRoot: '/', // acceso público desde la URL
+      rootPath: join(__dirname, '..', '..', 'uploads'),
+      serveRoot: '/api/',
+
     }),
 
     TypeOrmModule.forRootAsync({
