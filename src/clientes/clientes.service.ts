@@ -95,14 +95,12 @@ export class ClientesService {
     return cliente;
   }
 
-  async findOneByEmail(email: string): Promise<Cliente> {
+  async findOneByEmail(email: string): Promise<Cliente | null> {
     const cliente = await this.clienteRepository.findOne({
       where: { email },
       relations: ['rol'],
     });
-    if (!cliente) {
-      throw new Error(`Cliente con email ${email} no encontrado`);
-    }
+
     return cliente;
   }
 
