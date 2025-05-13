@@ -59,15 +59,18 @@ export class ClientesService {
 
     // Filtro por estado
     if (query.estado) {
-      clientes.andWhere('cliente.state = :estado', { state: query.estado });
+      clientes.andWhere('cliente.status = :estado', { estado: query.estado });
     }
 
     // Filtro por fecha de creación
-    if (query.fechaInicio && query.fechaFin) {
-      clientes.andWhere('cliente.fecha_creacion BETWEEN :inicio AND :fin', {
-        inicio: query.fechaInicio,
-        fin: query.fechaFin,
-      });
+    if (query.fechaInicio) {
+      const inicio = new Date(query.fechaInicio + 'T00:00:00'); // ISO formato seguro
+      clientes.andWhere('cliente.fecha_creacion >= :inicio', { inicio });
+    }
+    
+    if (query.fechaFin) {
+      const fin = new Date(query.fechaFin + 'T23:59:59.999'); // Final del día
+      clientes.andWhere('cliente.fecha_creacion <= :fin', { fin });
     }
 
     clientes.skip(skip).take(take).orderBy('cliente.fecha_creacion', 'DESC');
