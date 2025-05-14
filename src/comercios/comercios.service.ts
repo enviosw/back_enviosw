@@ -191,7 +191,8 @@ export class ComerciosService {
       'comercio.estado',
       'comercio.fecha_creacion',
       'comercio.fecha_actualizacion',
-      'comercio.horarios'
+      'comercio.horarios',
+      'servicio'
     ])
       .orderBy('comercio.fecha_creacion', 'DESC')
       .skip(skip)
