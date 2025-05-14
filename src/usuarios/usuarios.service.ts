@@ -5,32 +5,34 @@ import { Usuario } from './entities/usuario.entity';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { UpdateUsuarioDto } from './dto/update-usuario.dto';
 import { UsuarioQuery } from './interfaces/usuario.interface';
+import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class UsuariosService {
   constructor(
     @InjectRepository(Usuario)
     private readonly usuarioRepository: Repository<Usuario>,
-  ) {}
+  ) { }
 
   // Crear un nuevo usuario
   async create(createUsuarioDto: CreateUsuarioDto): Promise<Usuario> {
     const { comercio_id, ...resto } = createUsuarioDto;
-  
+
     const nuevoUsuario = this.usuarioRepository.create(resto);
-  
+
     if (comercio_id) {
       nuevoUsuario.comercio = { id: comercio_id } as any; // Solo enlaza por ID sin cargar todo el comercio
     }
-  
+
     return await this.usuarioRepository.save(nuevoUsuario);
   }
-  
+
 
   // Obtener todos los usuarios con filtros y paginación
   async findAll(query: UsuarioQuery) {
     const take = 20; // Definir registros por página
-    const skip = (query.page - 1) * take; // Calcular el offset basado en la página
+    const page = Number(query.page) || 1; // Asegura que sea número y por defecto 1
+    const skip = (page - 1) * take; // Calcular offset
 
     const qb = this.usuarioRepository.createQueryBuilder('usuario');
 
@@ -52,7 +54,7 @@ export class UsuariosService {
         );
       });
     }
-    
+
 
     // Filtro por estado
     if (query.estado) {
@@ -74,7 +76,7 @@ export class UsuariosService {
     return {
       data,
       total,
-      page: query.page,
+      page,
       lastPage: Math.ceil(total / take),
     };
   }
@@ -90,27 +92,41 @@ export class UsuariosService {
 
   // Obtener un usuario por su email
   async findOneByEmail(email: string) {
-    return this.usuarioRepository.findOne({
-      where: { email },
-      relations: ['comercio'], // <-- incluye la relación
-    });
+    return await this.usuarioRepository
+      .createQueryBuilder('usuario')
+      .addSelect('usuario.password') // <-- Forzamos traer password (aunque tenga select: false)
+      .leftJoinAndSelect('usuario.comercio', 'comercio') // <-- Cargamos comercio si existe
+      .where('usuario.email = :email', { email })
+      .getOne();
   }
 
 
-// Actualizar un usuario
+
+  // Actualizar un usuario
   async update(id: number, updateUsuarioDto: UpdateUsuarioDto): Promise<Usuario> {
     const usuario = await this.findOne(id);
-    const { comercio_id, ...resto } = updateUsuarioDto;
-  
-    const actualizado = this.usuarioRepository.merge(usuario, resto);
-  
+    const { comercio_id, password, ...resto } = updateUsuarioDto;
+
+    // Creamos el objeto final que vamos a mergear
+    const datosActualizar: Partial<Usuario> = { ...resto };
+
+    // Hashear la contraseña solo si viene y actualizar
+    if (password) {
+      datosActualizar.password = await bcrypt.hash(password, 10);
+    }
+
+    const actualizado = this.usuarioRepository.merge(usuario, datosActualizar);
+
+    // Relación con comercio si viene comercio_id
     if (comercio_id !== undefined) {
       actualizado.comercio = { id: comercio_id } as any;
     }
-  
+
     return await this.usuarioRepository.save(actualizado);
   }
-  
+
+
+
   // Eliminar un usuario
   async remove(id: number): Promise<void> {
     const usuario = await this.findOne(id);
