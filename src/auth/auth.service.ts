@@ -23,46 +23,60 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto) {
-    const { email, password, rol, nombre } = registerDto;
-
-    const userExists = await this.usuariosService.findOneByEmail(email);
-    if (userExists) {
-      throw new BadRequestException('El correo ya está registrado.');
-    }
-
-    const clienteExists = await this.clientesService.findOneByEmail(email);
-    if (clienteExists) {
-      throw new BadRequestException('El correo ya está registrado.');
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user =(rol.toLocaleLowerCase() !== 'cliente') ? await this.usuariosService.create({
-      nombre,
-      email,
-      password: hashedPassword,
-      rol: 'aliado',
-    }) : await this.clientesService.create({
-      name: registerDto.nombre,
-      lastName: registerDto.apellido || '',
-      address: registerDto.direccion || '',
-      phone: registerDto.telefono || '',
-      phone_2: registerDto.telefono2 || '',
-      status: 'activo',
-      email,
-      password: hashedPassword,
-      rol_id: 3, 
-    });
-
-    // Elimina el campo password si lo contiene
-    const { password: _, ...userWithoutPassword } = user;
-
+    try {
+      const { email, password, rol, nombre } = registerDto;
+      console.log(registerDto);
   
-    return {
-      message: 'Usuario creado con éxito',
-      user: userWithoutPassword,
-    };
+      const userExists = await this.usuariosService.findOneByEmail(email);
+      if (userExists) {
+        throw new BadRequestException('El correo ya está registrado.');
+      }
+  
+      const clienteExists = await this.clientesService.findOneByEmail(email);
+      if (clienteExists) {
+        throw new BadRequestException('El correo ya está registrado.');
+      }
+  
+      const hashedPassword = await bcrypt.hash(password, 10);
+  
+      const user = (rol.toLocaleLowerCase() !== 'cliente')
+        ? await this.usuariosService.create({
+            nombre,
+            email,
+            password: hashedPassword,
+            rol: 'aliado',
+          })
+        : await this.clientesService.create({
+            name: registerDto.nombre,
+            lastName: registerDto.apellido || '',
+            address: registerDto.direccion || '',
+            phone: registerDto.telefono || '',
+            phone_2: registerDto.telefono2 || '',
+            status: 'activo',
+            email,
+            password: hashedPassword,
+            rol_id: 3,
+          });
+  
+      console.log('user created', user);
+  
+      const { password: _, ...userWithoutPassword } = user;
+  
+      return {
+        message: 'Usuario creado con éxito',
+        user: userWithoutPassword,
+      };
+    } catch (error) {
+      console.error('Error en registro:', error);
+      // Re-lanza si ya es una excepción de NestJS
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      // Lanza una excepción genérica si no se reconoció
+      throw new Error('Error al registrar el usuario');
+    }
   }
+  
 
   async login({ email, password }: LoginDto) {
 

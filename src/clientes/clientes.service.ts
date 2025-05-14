@@ -34,10 +34,7 @@ export class ClientesService {
 
     const clientes = this.clienteRepository.createQueryBuilder('cliente');
 
-    // copilot necesito que me traiga tambien el rol
-    clientes.leftJoinAndSelect('cliente.rol', 'rol');
-    // clientes.addSelect('rol.name', 'rol_name');
-    clientes.addSelect('rol.id', 'rol_id');
+    // clientes.leftJoinAndSelect('cliente.rol', 'rol');
 
     // Filtro de búsqueda
     if (query.search) {
@@ -49,8 +46,7 @@ export class ClientesService {
               cliente.name ILIKE :${param} OR
               cliente.lastName ILIKE :${param} OR
               cliente.email ILIKE :${param} OR
-              cliente.rol ILIKE :${param} OR
-              cliente.state ILIKE :${param} OR
+              cliente.status ILIKE :${param} OR
               cliente.phone ILIKE :${param} OR
               cliente.phone_2 ILIKE :${param} OR
               cliente.address ILIKE :${param}
@@ -63,15 +59,18 @@ export class ClientesService {
 
     // Filtro por estado
     if (query.estado) {
-      clientes.andWhere('cliente.state = :estado', { state: query.estado });
+      clientes.andWhere('cliente.status = :estado', { estado: query.estado });
     }
 
     // Filtro por fecha de creación
-    if (query.fechaInicio && query.fechaFin) {
-      clientes.andWhere('cliente.fecha_creacion BETWEEN :inicio AND :fin', {
-        inicio: query.fechaInicio,
-        fin: query.fechaFin,
-      });
+    if (query.fechaInicio) {
+      const inicio = new Date(query.fechaInicio + 'T00:00:00'); // ISO formato seguro
+      clientes.andWhere('cliente.fecha_creacion >= :inicio', { inicio });
+    }
+    
+    if (query.fechaFin) {
+      const fin = new Date(query.fechaFin + 'T23:59:59.999'); // Final del día
+      clientes.andWhere('cliente.fecha_creacion <= :fin', { fin });
     }
 
     clientes.skip(skip).take(take).orderBy('cliente.fecha_creacion', 'DESC');
@@ -99,18 +98,17 @@ export class ClientesService {
     return cliente;
   }
 
-  async findOneByEmail(email: string): Promise<Cliente> {
+  async findOneByEmail(email: string): Promise<Cliente | null> {
     const cliente = await this.clienteRepository.findOne({
       where: { email },
       relations: ['rol'],
     });
-    if (!cliente) {
-      throw new Error(`Cliente con email ${email} no encontrado`);
-    }
+
     return cliente;
   }
 
   async update(id: number, updateClienteDto: UpdateClienteDto) {
+    
     const { rol_id, ...resto } = updateClienteDto;
 
     const cliente = await this.clienteRepository.findOneBy({ id });
