@@ -25,6 +25,13 @@ export class Servicio {
   @Column({ length: 20, nullable: true })
   color: string;
 
+  // NUEVAS COLUMNAS AÑADIDAS:
+  @Column({ type: 'int', nullable: true })
+  orden: number;
+
+  @Column({ length: 255, nullable: true })
+  foto: string;
+
   @CreateDateColumn({ name: 'fecha_creacion' })
   fecha_creacion: Date;
 

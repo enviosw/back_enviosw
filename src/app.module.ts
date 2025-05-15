@@ -4,7 +4,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { ComerciosModule } from './comercios/comercios.module';
-import { TiposComerciosModule } from './tipos_comercios/tipos_comercios.module';
 import { RolesModule } from './roles/roles.module';
 import { FileUploadModule } from './common/file-upload.module';
 import { ServiciosModule } from './servicios/servicios.module';
@@ -46,8 +45,6 @@ import { ClientesModule } from './clientes/clientes.module';
     AuthModule,
 
     ComerciosModule,
-
-    TiposComerciosModule,
 
     ClientesModule,
 
