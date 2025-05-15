@@ -37,14 +37,15 @@ export class ProductosController {
   }
 
   @Get('comercio')
-  async findAllComercios(
-    @Query('comercio_id') comercio_id: number,
-    @Query('categoria_id') categoria_id?: number,
-  ): Promise<Producto[]> {
-    return this.productosService.findAllComercio(comercio_id, categoria_id);
+  async findAllProductos(
+    @Query('comercio_id') comercioId: number,
+    @Query('categoria_id') categoriaId?: number,
+    @Query('search') search?: string,
+    @Query('page') page: number = 1,
+  ) {
+    return this.productosService.findProductosByComercio(comercioId, categoriaId, search, page);
   }
 
-  
 
 
   @Patch(':id')

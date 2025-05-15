@@ -93,43 +93,93 @@ export class ProductosService {
 
 
 
-  async findAllComercio(comercio_id: number, categoria_id?: number): Promise<Producto[]> {
-    const query = this.productosRepository.createQueryBuilder('producto')
-      .leftJoinAndSelect('producto.categoria', 'categoria')
-      .where('producto.comercio = :comercio_id', { comercio_id });
+  async findProductosByComercio(
+    comercioId: number,
+    categoriaId?: number,
+    search: string = '',
+    page: number = 1,
+  ): Promise<{ data: Producto[]; total: number; page: number; lastPage: number }> {
+    const take = 25;
+    const skip = (page - 1) * take;
 
-    if (categoria_id) {
-      query.andWhere('producto.categoria = :categoria_id', { categoria_id });
+    const qb = this.productosRepository
+      .createQueryBuilder('producto')
+      .leftJoinAndSelect('producto.categoria', 'categoria')
+      .where('producto.comercio = :comercioId', { comercioId });
+
+    if (categoriaId) {
+      qb.andWhere('producto.categoria = :categoriaId', { categoriaId });
     }
 
-    return query.getMany();
+    if (search.trim()) {
+      const palabras = search.trim().split(/\s+/);
+
+      palabras.forEach((palabra, index) => {
+        const param = `palabra${index}`;
+        qb.andWhere(
+          `(
+          producto.nombre ILIKE :${param} OR
+          producto.descripcion ILIKE :${param} OR
+          producto.unidad ILIKE :${param}
+        )`,
+          { [param]: `%${palabra}%` },
+        );
+      });
+    }
+
+    qb.select([
+      'producto.id',
+      'producto.nombre',
+      'producto.descripcion',
+      'producto.precio',
+      'producto.precio_descuento',
+      'producto.estado',
+      'producto.estado_descuento',
+      'producto.unidad',
+      'producto.imagen_url',
+      'producto.fecha_creacion',
+      'producto.fecha_actualizacion',
+      'categoria'
+    ])
+      .orderBy('producto.fecha_creacion', 'DESC')
+      .skip(skip)
+      .take(take);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      total,
+      page,
+      lastPage: Math.ceil(total / take),
+    };
   }
 
 
   async update(id: number, updateProductoDto: CreateProductoDto): Promise<Producto> {
     const producto = await this.findOne(id);
-  
+
     if (updateProductoDto.categoriaId) {
       const categoria = await this.categoriaServices.findOne(updateProductoDto.categoriaId);
       if (!categoria) throw new Error('Categoría no encontrada');
       producto.categoria = categoria;
     }
-  
+
     if (updateProductoDto.comercioId) {
       const comercio = await this.comercioServices.findOne(updateProductoDto.comercioId);
       if (!comercio) throw new Error('Comercio no encontrado');
       producto.comercio = comercio;
     }
-  
+
     Object.assign(producto, {
       ...updateProductoDto,
       estado: updateProductoDto.estado || producto.estado,
       estado_descuento: updateProductoDto.estado_descuento || producto.estado_descuento,
       imagen_url: updateProductoDto.imagen_url || producto.imagen_url,
     });
-  
+
     return this.productosRepository.save(producto);
   }
-  
+
 
 }
