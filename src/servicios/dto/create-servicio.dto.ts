@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNotEmpty, IsHexColor } from 'class-validator';
+import { IsString, IsOptional, IsNotEmpty, IsHexColor, IsInt } from 'class-validator';
 
 export class CreateServicioDto {
   @IsString()
@@ -15,4 +15,12 @@ export class CreateServicioDto {
   @IsOptional()
   @IsHexColor()
   color?: string;
+
+  @IsOptional()
+  @IsInt()
+  orden?: number;
+
+  @IsOptional()
+  @IsString()
+  foto?: string; // <-- Añadido aquí
 }
