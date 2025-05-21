@@ -28,6 +28,12 @@ export class ClientesController {
     return this.clientesService.update(id, updateClienteDto);
   }
 
+  @Patch('hideCustomers')
+  hideClientes(@Body('ids') ids: number[]) {
+    console.log(ids);
+    return this.clientesService.hideClientes(ids);
+  }
+
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.clientesService.remove(id);

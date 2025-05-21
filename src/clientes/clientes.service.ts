@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateClienteDto } from './dto/create-cliente.dto';
 import { UpdateClienteDto } from './dto/update-cliente.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Cliente } from './entities/cliente.entity';
 import { ClienteQuery } from './interfaces/cliente.interface';
 
@@ -122,6 +122,13 @@ export class ClientesService {
     }
 
     return this.clienteRepository.save(clienteActualizado);
+  }
+
+  async hideClientes(ids:number[]){
+    return await this.clienteRepository.update(
+      { id: In(ids) },
+      { status: 'inactivo' }
+    );
   }
 
   async remove(id: number) {
