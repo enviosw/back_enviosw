@@ -7,12 +7,12 @@ export class CreateClienteDto {
     @IsString()
     @IsNotEmpty({ message: 'El nombre es obligatorio' })
     @Length(3, 150)
-    name: string;
+    nombre: string;
 
     @IsString()
     @IsNotEmpty({ message: 'El apellido es obligatorio' })
     @Length(3, 150)
-    lastName: string;
+    apellido: string;
 
     @IsEmail()
     @IsNotEmpty({ message: 'El email es obligatorio' })
@@ -27,21 +27,21 @@ export class CreateClienteDto {
     @IsString()
     @IsNotEmpty({ message: 'El teléfono es obligatorio' })
     @Length(6, 20)
-    phone: string;
+    telefono: string;
 
     @IsString()
     @IsOptional()
-    phone_2: string;
+    telefono_2: string;
 
     @IsString()
     @IsNotEmpty({ message: 'La dirección es obligatoria' })
     @Length(6, 255)
-    address: string;
+    direccion: string;
 
     @IsString()
     @IsNotEmpty({ message: 'El estado es obligatorio' })
     @Length(3, 20)
-    status: string;
+    estado: string;
 
     @IsNumber()
     @IsNotEmpty({ message: 'El rol es obligatorio' })
