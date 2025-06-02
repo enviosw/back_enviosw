@@ -12,6 +12,7 @@ import { ProductosModule } from './productos/productos.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { ClientesModule } from './clientes/clientes.module';
+import { ImagenesModule } from './imagenes/imagenes.module';
 
 @Module({
   imports: [
@@ -36,7 +37,7 @@ import { ClientesModule } from './clientes/clientes.module';
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: false,
       }),
     }),
 
@@ -57,6 +58,8 @@ import { ClientesModule } from './clientes/clientes.module';
     CategoriasModule,
 
     ProductosModule,
+
+    ImagenesModule,
   ],
 })
 export class AppModule { }

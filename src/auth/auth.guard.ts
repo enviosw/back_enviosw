@@ -10,7 +10,7 @@ import { jwtConstants } from './constants/jwt.constant';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(private readonly jwtService: JwtService) { }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -24,11 +24,15 @@ export class AuthGuard implements CanActivate {
       const payload = await this.jwtService.verifyAsync(token, {
         secret: jwtConstants.accessTokenSecret,
       });
-      request.user = payload;
+
+      console.log('👉 Payload decodificado:', payload);
+
+      // Reemplaza request.user con el principal
+      request.user = payload; // 👈 aquí está el rol y la info útil
     } catch (error) {
-      console.log(error)
-      throw new UnauthorizedException();
+      throw new UnauthorizedException('Token inválido');
     }
+
 
     return true;
   }
