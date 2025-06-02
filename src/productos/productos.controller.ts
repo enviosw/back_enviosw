@@ -6,9 +6,9 @@ import { Producto } from './entities/producto.entity';
 import { ProductoQuery } from './interfaces/producto-query.interface';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileUploadService } from '../common/file-upload.service'; // Importar el servicio de subida
-import { RolesGuard } from 'src/auth/roles.guard';
-import { Roles } from 'src/auth/roles.decorator';
-import { AuthGuard } from 'src/auth/auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { AuthGuard } from '../auth/auth.guard';
 
 @Controller('productos')
 export class ProductosController {

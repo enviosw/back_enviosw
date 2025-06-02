@@ -4,7 +4,7 @@ import { Categoria } from './entities/categoria.entity';
 import { CategoriasController } from './categorias.controller';
 import { CategoriasService } from './categorias.service';
 import { ComerciosModule } from '../comercios/comercios.module';
-import { AuthModule } from 'src/auth/auth.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Categoria]), ComerciosModule, forwardRef(() => AuthModule)],

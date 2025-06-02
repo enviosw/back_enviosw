@@ -2,10 +2,10 @@ import { Controller, Post, Get, Delete, Param, UploadedFile, UseInterceptors, Bo
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ImagenesService } from './imagenes.service';
 import { CreateImagenDto } from './dto/create-imagene.dto';
-import { FileUploadService } from 'src/common/file-upload.service';
-import { RolesGuard } from 'src/auth/roles.guard';
-import { Roles } from 'src/auth/roles.decorator';
-import { AuthGuard } from 'src/auth/auth.guard';
+import { FileUploadService } from '../common/file-upload.service';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { AuthGuard } from '../auth/auth.guard';
 
 @Controller('imagenes')
 export class ImagenesController {

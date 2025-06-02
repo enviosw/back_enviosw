@@ -3,9 +3,9 @@ import { Controller, Post, Body, Get, Param, Patch, Delete, UseGuards, Req } fro
 import { CategoriasService } from './categorias.service';
 import { CreateCategoriaDto } from './dto/create-categoria.dto';
 import { Categoria } from './entities/categoria.entity';
-import { Roles } from 'src/auth/roles.decorator';
-import { RolesGuard } from 'src/auth/roles.guard';
-import { AuthGuard } from 'src/auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
+import { AuthGuard } from '../auth/auth.guard';
 
 @Controller('categorias')
 export class CategoriasController {

@@ -3,7 +3,7 @@ import { ComerciosService } from './comercios.service';
 import { ComerciosController } from './comercios.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Comercio } from './entities/comercio.entity';
-import { AuthModule } from 'src/auth/auth.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Comercio]), forwardRef(() => AuthModule)],
