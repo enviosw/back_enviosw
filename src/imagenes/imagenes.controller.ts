@@ -3,16 +3,16 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ImagenesService } from './imagenes.service';
 import { CreateImagenDto } from './dto/create-imagene.dto';
 import { FileUploadService } from 'src/common/file-upload.service';
-import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { Roles } from 'src/auth/roles.decorator';
+import { AuthGuard } from 'src/auth/auth.guard';
 
 @Controller('imagenes')
 export class ImagenesController {
   constructor(private readonly imagenesService: ImagenesService) { }
 
   @Post('subir')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(AuthGuard, RolesGuard)
   @Roles('administrador')
   @UseInterceptors(FileInterceptor('archivo', { storage: FileUploadService.storage }))
   async subir(
@@ -28,7 +28,7 @@ export class ImagenesController {
   }
 
   @Delete(':id')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(AuthGuard, RolesGuard)
   @Roles('administrador')
   eliminar(@Param('id') id: number) {
     return this.imagenesService.eliminar(id);
