@@ -17,7 +17,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return {
       userId: payload.sub,
       email: payload.email,
-      role: payload.role,
+      role: payload.rol, // <-- aquí mapeas "rol" del token a "role" esperado por el guardia
+      nombre: payload.nombre,
     };
   }
 }

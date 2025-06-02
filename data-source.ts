@@ -4,6 +4,7 @@ dotenv.config(); // ✅ Cargar primero
 import { DataSource } from 'typeorm';
 
 console.log('✅ DB_HOST:', process.env.DB_HOST); // para probar
+const isCompiled = __filename.endsWith('.js');
 
 
 export const AppDataSource = new DataSource({
@@ -13,7 +14,7 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  entities: [__dirname + '/**/**/*.entity{.ts,.js}'],
-  migrations: ['../migrations/*.ts'],
+  entities: [isCompiled ? 'dist/**/*.entity.js' : 'src/**/*.entity.ts'],
+  migrations: [isCompiled ? 'dist/migrations/*.js' : 'src/migrations/*.ts'],
   synchronize: false,
 });

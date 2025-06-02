@@ -1,11 +1,14 @@
 // src/productos/productos.controller.ts
-import { Controller, Get, Post, Body, Param, Query, UseInterceptors, UploadedFile, Patch } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseInterceptors, UploadedFile, Patch, UseGuards } from '@nestjs/common';
 import { ProductosService } from './productos.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { Producto } from './entities/producto.entity';
 import { ProductoQuery } from './interfaces/producto-query.interface';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileUploadService } from '../common/file-upload.service'; // Importar el servicio de subida
+import { RolesGuard } from 'src/auth/roles.guard';
+import { Roles } from 'src/auth/roles.decorator';
+import { AuthGuard } from 'src/auth/auth.guard';
 
 @Controller('productos')
 export class ProductosController {
@@ -14,6 +17,8 @@ export class ProductosController {
   ) { }
 
   @Post()
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   @UseInterceptors(
     FileInterceptor('logo', { storage: FileUploadService.storage }),
   )
@@ -32,11 +37,15 @@ export class ProductosController {
   }
 
   @Get()
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   findAll(@Query() query: ProductoQuery) {
     return this.productosService.findAll(query);
   }
 
   @Get('comercio')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   async findAllProductos(
     @Query('comercio_id') comercioId: number,
     @Query('categoria_id') categoriaId?: number,
@@ -49,6 +58,8 @@ export class ProductosController {
 
 
   @Patch(':id')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   @UseInterceptors(FileInterceptor('logo', { storage: FileUploadService.storage }))
   async update(
     @Param('id') id: number,
@@ -65,6 +76,8 @@ export class ProductosController {
 
 
   @Get('/buscar/:id')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   findOne(@Param('id') id: string): Promise<Producto> {
     return this.productosService.findOne(+id);
   }

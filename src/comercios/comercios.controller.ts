@@ -10,6 +10,7 @@ import {
   UploadedFile,
   ParseIntPipe,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ComerciosService } from './comercios.service';
 import { CreateComercioDto } from './dto/create-comercio.dto';
@@ -17,6 +18,9 @@ import { UpdateComercioDto } from './dto/update-comercio.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileUploadService } from '../common/file-upload.service'; // Importar el servicio de subida
 import { Comercio } from './entities/comercio.entity';
+import { RolesGuard } from 'src/auth/roles.guard';
+import { Roles } from 'src/auth/roles.decorator';
+import { AuthGuard } from 'src/auth/auth.guard';
 
 @Controller('comercios')
 export class ComerciosController {
@@ -27,6 +31,8 @@ export class ComerciosController {
 
   // Crear un nuevo comercio y subir una imagen
   @Post()
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
   @UseInterceptors(
     FileInterceptor('logo', { storage: FileUploadService.storage }),
   ) // 'logo' es el nombre del campo del formulario
@@ -42,6 +48,8 @@ export class ComerciosController {
 
   // comercios.controller.ts
   @Get()
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
   findAll(
     @Query('page') page = 1,
     @Query('search') search?: string,
@@ -68,17 +76,23 @@ export class ComerciosController {
   }
 
   @Get('search')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
   async searchAll(@Query('search') search: string) {
     return this.comerciosService.searchAll(search);
   }
 
   @Get(':id')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.comerciosService.findOne(id);
   }
 
   // Actualizar un comercio y su logo
   @Patch(':id')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
   @UseInterceptors(
     FileInterceptor('logo', { storage: FileUploadService.storage }),
   ) // 'logo' es el nombre del campo del formulario
@@ -95,6 +109,8 @@ export class ComerciosController {
 
   // Eliminar un comercio
   @Delete(':id')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.comerciosService.remove(id);
   }
@@ -102,12 +118,16 @@ export class ComerciosController {
 
   // Obtener los horarios de un comercio por su ID
   @Get(':id/horarios')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   async getHorarios(@Param('id', ParseIntPipe) id: number) {
     return this.comerciosService.getHorariosByComercio(id);
   }
 
   // Actualizar los horarios de un comercio por su ID
   @Patch(':id/horarios')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   async updateHorarios(
     @Param('id', ParseIntPipe) id: number,
     @Body() horarios: any, // Se espera un objeto con los horarios a actualizar
