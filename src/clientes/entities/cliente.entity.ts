@@ -8,10 +8,10 @@ export class Cliente {
     id: number;
 
     @Column("varchar", { length: 150 })
-    name: string;
+    nombre: string;
 
     @Column("varchar", { length: 150 })
-    lastName: string;
+    apellido: string;
 
     @Column("varchar", { length: 255, unique: true })
     email: string;
@@ -20,16 +20,16 @@ export class Cliente {
     password: string;
 
     @Column("varchar", { length: 20 })
-    phone: string;
+    telefono: string;
 
     @Column("varchar", { length: 20, nullable: true  })
-    phone_2: string;
+    telefono_2: string;
     
     @Column("varchar", { length: 255 })
-    address: string;
+    direccion: string;
 
     @Column("varchar", { length: 20 })
-    status: string;
+    estado: string;
 
     @CreateDateColumn({ name: 'fecha_creacion' })
     fecha_creacion: Date;

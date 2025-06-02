@@ -43,13 +43,13 @@ export class ClientesService {
         const param = `palabra${index}`;
         clientes.andWhere(
           `(
-              cliente.name ILIKE :${param} OR
-              cliente.lastName ILIKE :${param} OR
+              cliente.nombre ILIKE :${param} OR
+              cliente.apellido ILIKE :${param} OR
               cliente.email ILIKE :${param} OR
-              cliente.status ILIKE :${param} OR
-              cliente.phone ILIKE :${param} OR
-              cliente.phone_2 ILIKE :${param} OR
-              cliente.address ILIKE :${param}
+              cliente.estado ILIKE :${param} OR
+              cliente.telefono ILIKE :${param} OR
+              cliente.telefono_2 ILIKE :${param} OR
+              cliente.direccion ILIKE :${param}
             )`,
           { [param]: `%${palabra}%` },
         );
@@ -59,7 +59,7 @@ export class ClientesService {
 
     // Filtro por estado
     if (query.estado) {
-      clientes.andWhere('cliente.status = :estado', { estado: query.estado });
+      clientes.andWhere('cliente.estado = :estado', { estado: query.estado });
     }
 
     // Filtro por fecha de creación
@@ -113,7 +113,7 @@ export class ClientesService {
 
     const cliente = await this.clienteRepository.findOneBy({ id });
     if (!cliente) {
-      throw new NotFoundException(`El cliente ${updateClienteDto.name} no encontrado para actualizarlo.`);
+      throw new NotFoundException(`El cliente ${updateClienteDto.nombre} no encontrado para actualizarlo.`);
     }
     
     const clienteActualizado = { ...cliente, ...resto };
@@ -127,7 +127,7 @@ export class ClientesService {
   async hideClientes(ids:number[]){
     return await this.clienteRepository.update(
       { id: In(ids) },
-      { status: 'inactivo' }
+      { estado: 'inactivo' }
     );
   }
 

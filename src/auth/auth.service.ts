@@ -25,7 +25,6 @@ export class AuthService {
   async register(registerDto: RegisterDto) {
     try {
       const { email, password, rol, nombre } = registerDto;
-      console.log(registerDto);
 
       const userExists = await this.usuariosService.findOneByEmail(email);
       if (userExists) {
@@ -47,18 +46,16 @@ export class AuthService {
           rol: 'aliado',
         })
         : await this.clientesService.create({
-          name: registerDto.nombre,
-          lastName: registerDto.apellido || '',
-          address: registerDto.direccion || '',
-          phone: registerDto.telefono || '',
-          phone_2: registerDto.telefono2 || '',
-          status: 'activo',
+          nombre: registerDto.nombre,
+          apellido: registerDto.apellido || '',
+          direccion: registerDto.direccion || '',
+          telefono: registerDto.telefono || '',
+          telefono_2: registerDto.telefono2 || '',
+          estado: 'activo',
           email,
           password: hashedPassword,
           rol_id: 3,
         });
-
-      console.log('user created', user);
 
       const { password: _, ...userWithoutPassword } = user;
 
@@ -81,7 +78,6 @@ export class AuthService {
   async login({ email, password }: LoginDto) {
 
     const user = await this.usuariosService.findOneByEmail(email);
-console.log(user)
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       throw new UnauthorizedException('Credenciales inválidas');
