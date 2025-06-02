@@ -11,9 +11,9 @@ import {
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/registrar-usuario.dto';
 import { LoginDto } from './dto/login.dto';
-import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from './roles.guard';
 import { Roles } from './roles.decorator';
+import { AuthGuard } from './auth.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -31,17 +31,10 @@ export class AuthController {
   }
 
   @Get('profile')
-  @UseGuards(AuthGuard('jwt'))
   getProfile(@Request() req) {
     return req.user;
   }
 
-  @Get('admin-only')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles('administrador')
-  adminData() {
-    return { message: 'Solo accesible por administradores' };
-  }
 
   @Post('refresh')
   refreshToken(@Body() body: { userId: number; refreshToken: string }) {
@@ -49,7 +42,8 @@ export class AuthController {
   }
 
   @Post('logout')
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('aliado')
   logout(@Request() req) {
     return this.authService.logout(req.user.userId);
   }
