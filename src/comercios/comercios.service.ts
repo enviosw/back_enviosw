@@ -239,4 +239,18 @@ return {
   return await this.comercioRepo.save(comercio);
 }
 
+
+async toggleActivarNumero(id: number): Promise<Comercio> {
+  const comercio = await this.comercioRepo.findOneBy({ id });
+
+  if (!comercio) {
+    throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+  }
+
+  comercio.activar_numero = comercio.activar_numero === 1 ? 0 : 1;
+
+  return this.comercioRepo.save(comercio);
+}
+
+
 }

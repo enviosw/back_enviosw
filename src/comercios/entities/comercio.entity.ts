@@ -52,8 +52,13 @@ export class Comercio {
   @Column({ default: true })
   estado: string;
 
-    // Nueva columna para horarios (almacena datos JSON)
-  @Column('jsonb', { nullable: true, 
+
+  @Column({ type: 'int', default: 0 })
+  activar_numero: number; // 0 = inactivo, 1 = activo
+
+  // Nueva columna para horarios (almacena datos JSON)
+  @Column('jsonb', {
+    nullable: true,
     default: {
       lunes: { apertura: '07:00 AM', cierre: '04:30 PM' },
       martes: { apertura: '07:00 AM', cierre: '04:30 PM' },
@@ -62,7 +67,7 @@ export class Comercio {
       viernes: { apertura: '07:00 AM', cierre: '04:30 PM' },
       sabado: { apertura: '07:00 AM', cierre: '04:30 PM' },
       domingo: { apertura: '07:00 AM', cierre: '09:00 PM' },
-    } 
+    }
   })
   horarios: {
     lunes: { apertura: string, cierre: string };

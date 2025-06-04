@@ -44,8 +44,6 @@ export class ProductosController {
   }
 
   @Get('comercio')
-  @UseGuards(AuthGuard, RolesGuard)
-  @Roles('aliado')
   async findAllProductos(
     @Query('comercio_id') comercioId: number,
     @Query('categoria_id') categoriaId?: number,
