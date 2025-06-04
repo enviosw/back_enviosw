@@ -37,8 +37,6 @@ export class ProductosController {
   }
 
   @Get()
-  @UseGuards(AuthGuard, RolesGuard)
-  @Roles('aliado')
   findAll(@Query() query: ProductoQuery) {
     return this.productosService.findAll(query);
   }
