@@ -3,6 +3,8 @@ import { exec } from 'child_process';
 import { DataSource } from 'typeorm';
 import * as dotenv from 'dotenv';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
+import * as fs from 'fs';
+import * as path from 'path'
 
 // ✅ Cargar variables de entorno
 dotenv.config();
@@ -39,7 +41,14 @@ program
             const pass = options.password;
 
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const backupFile = `backup_${db}_${timestamp}.sql`;
+            const backupDir = 'src/backups';
+            const backupFile = `${backupDir}/backup_${db}_${timestamp}.sql`;
+
+            // Crear carpeta si no existe
+            if (!fs.existsSync(backupDir)) {
+                fs.mkdirSync(backupDir, { recursive: true });
+            }
+
 
             const command = `set PGPASSWORD=${pass} && pg_dump -h ${host} -U ${user} -d ${db} > ${backupFile}`;
 
