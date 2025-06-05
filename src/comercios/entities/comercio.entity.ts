@@ -60,13 +60,13 @@ export class Comercio {
   @Column('jsonb', {
     nullable: true,
     default: {
-      lunes: { apertura: '07:00 AM', cierre: '04:30 PM' },
-      martes: { apertura: '07:00 AM', cierre: '04:30 PM' },
-      miercoles: { apertura: '07:00 AM', cierre: '04:30 PM' },
-      jueves: { apertura: '07:00 AM', cierre: '04:30 PM' },
-      viernes: { apertura: '07:00 AM', cierre: '04:30 PM' },
-      sabado: { apertura: '07:00 AM', cierre: '04:30 PM' },
-      domingo: { apertura: '07:00 AM', cierre: '09:00 PM' },
+      lunes: { apertura: '07:00 AM', cierre: '10:30 PM' },
+      martes: { apertura: '07:00 AM', cierre: '10:30 PM' },
+      miercoles: { apertura: '07:00 AM', cierre: '10:30 PM' },
+      jueves: { apertura: '07:00 AM', cierre: '10:30 PM' },
+      viernes: { apertura: '07:00 AM', cierre: '10:30 PM' },
+      sabado: { apertura: '07:00 AM', cierre: '10:30 PM' },
+      domingo: { apertura: '07:00 AM', cierre: '10:00 PM' },
     }
   })
   horarios: {

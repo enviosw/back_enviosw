@@ -107,11 +107,10 @@ export class UsuariosService {
     const usuario = await this.findOne(id);
     const { comercio_id, password, ...resto } = updateUsuarioDto;
 
-    // Creamos el objeto final que vamos a mergear
     const datosActualizar: Partial<Usuario> = { ...resto };
 
-    // Hashear la contraseña solo si viene y actualizar
-    if (password) {
+    // Solo actualiza la contraseña si no está vacía
+    if (password && password.trim() !== '') {
       datosActualizar.password = await bcrypt.hash(password, 10);
     }
 

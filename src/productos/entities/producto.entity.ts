@@ -11,7 +11,7 @@ export class Producto {
   @Column()
   nombre: string;
 
-  @Column()
+  @Column({ nullable: true })
   descripcion: string;
 
   @ManyToOne(() => Categoria, (categoria) => categoria.productos)
@@ -32,8 +32,9 @@ export class Producto {
   @Column({ default: 'inactivo' })
   estado_descuento: string;
 
-  @Column()
+  @Column({ nullable: true })
   unidad: string;
+
   @Column({ nullable: true })
   imagen_url: string;
 
