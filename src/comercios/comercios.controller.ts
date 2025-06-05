@@ -83,8 +83,6 @@ export class ComerciosController {
   }
 
   @Get(':id')
-  @UseGuards(AuthGuard, RolesGuard)
-  @Roles('administrador')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.comerciosService.findOne(id);
   }
