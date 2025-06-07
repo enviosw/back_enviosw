@@ -143,11 +143,11 @@ export class ComerciosService {
   }
 
 
-async findComerciosByServicio(
+  async findComerciosByServicio(
     servicioId: number,
     search: string = '',
     page: number = 1,
-  ): Promise < { data: Comercio[]; total: number; page: number; lastPage: number } > {
+  ): Promise<{ data: Comercio[]; total: number; page: number; lastPage: number }> {
     const take = 30;
     const skip = (page - 1) * take;
 
@@ -155,14 +155,16 @@ async findComerciosByServicio(
       .createQueryBuilder('comercio')
       .select('comercio.id', 'id')
       .leftJoin('comercio.servicio', 'servicio')
-      .where('servicio.id = :servicioId', { servicioId });
+      .where('servicio.id = :servicioId', { servicioId })
+      .andWhere('comercio.estado = :estado', { estado: 'activo' }); // 👈 Agregado aquí
 
-    if(search.trim()) {
-  const palabras = search.trim().split(/\s+/);
-  palabras.forEach((palabra, index) => {
-    const param = `palabra${index}`;
-    subQb.andWhere(
-      `(
+
+    if (search.trim()) {
+      const palabras = search.trim().split(/\s+/);
+      palabras.forEach((palabra, index) => {
+        const param = `palabra${index}`;
+        subQb.andWhere(
+          `(
           comercio.nombre_comercial ILIKE :${param} OR 
           comercio.razon_social ILIKE :${param} OR 
           comercio.nit ILIKE :${param} OR 
@@ -173,84 +175,84 @@ async findComerciosByServicio(
           comercio.telefono_secundario ILIKE :${param} OR 
           comercio.direccion ILIKE :${param}
         )`,
-      { [param]: `%${palabra}%` },
-    );
-  });
-}
+          { [param]: `%${palabra}%` },
+        );
+      });
+    }
 
-// Obtener IDs aleatorios
-const idsResult = await subQb
-  .orderBy('RANDOM()')
-  .offset(skip)
-  .limit(take)
-  .getRawMany();
+    // Obtener IDs aleatorios
+    const idsResult = await subQb
+      .orderBy('RANDOM()')
+      .offset(skip)
+      .limit(take)
+      .getRawMany();
 
-const ids = idsResult.map((row) => row.id);
+    const ids = idsResult.map((row) => row.id);
 
-let data: Comercio[] = [];
-if (ids.length) {
-  const rawData = await this.comercioRepo.find({
-    where: { id: In(ids) },
-    relations: ['servicio'],
-  });
+    let data: Comercio[] = [];
+    if (ids.length) {
+      const rawData = await this.comercioRepo.find({
+        where: { id: In(ids) },
+        relations: ['servicio'],
+      });
 
-  // Reordenar manualmente según el orden aleatorio original
-  const dataMap = new Map(rawData.map(c => [c.id, c]));
-  data = ids.map(id => dataMap.get(id)).filter(Boolean) as Comercio[];
-}
+      // Reordenar manualmente según el orden aleatorio original
+      const dataMap = new Map(rawData.map(c => [c.id, c]));
+      data = ids.map(id => dataMap.get(id)).filter(Boolean) as Comercio[];
+    }
 
-const total = await subQb.getCount();
+    const total = await subQb.getCount();
 
-return {
-  data,
-  total,
-  page,
-  lastPage: Math.ceil(total / take),
-};
-}
+    return {
+      data,
+      total,
+      page,
+      lastPage: Math.ceil(total / take),
+    };
+  }
 
 
 
 
 
   // Obtener los horarios de un comercio por su ID
-  async getHorariosByComercio(id: number): Promise < any > {
-  const comercio = await this.comercioRepo.findOne({
-    where: { id },
-    select: ['horarios'], // Solo seleccionamos los horarios
-  });
+  async getHorariosByComercio(id: number): Promise<any> {
+    const comercio = await this.comercioRepo.findOne({
+      where: { id },
+      select: ['horarios'], // Solo seleccionamos los horarios
+    });
 
-  if(!comercio) {
-    throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
-  }
+    if (!comercio) {
+      throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+    }
 
     return comercio.horarios;
-}
+  }
 
   // Actualizar los horarios de un comercio
-  async updateHorarios(id: number, horarios: any): Promise < Comercio > {
-  const comercio = await this.comercioRepo.findOne({ where: { id } });
+  async updateHorarios(id: number, horarios: any): Promise<Comercio> {
+    const comercio = await this.comercioRepo.findOne({ where: { id } });
 
-  if(!comercio) {
-    throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
-  }
+    if (!comercio) {
+      throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+    }
 
     comercio.horarios = horarios; // Actualizamos los horarios
-  return await this.comercioRepo.save(comercio);
-}
-
-
-async toggleActivarNumero(id: number): Promise<Comercio> {
-  const comercio = await this.comercioRepo.findOneBy({ id });
-
-  if (!comercio) {
-    throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+    return await this.comercioRepo.save(comercio);
   }
 
-  comercio.activar_numero = comercio.activar_numero === 1 ? 0 : 1;
 
-  return this.comercioRepo.save(comercio);
-}
+  async toggleActivarNumero(id: number): Promise<Comercio> {
+    const comercio = await this.comercioRepo.findOneBy({ id });
+
+    if (!comercio) {
+      throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+    }
+
+    comercio.activar_numero = comercio.activar_numero === 1 ? 0 : 1;
+
+    return this.comercioRepo.save(comercio);
+  }
 
 
 }
