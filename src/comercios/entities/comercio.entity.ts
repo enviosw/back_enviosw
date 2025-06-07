@@ -49,7 +49,7 @@ export class Comercio {
   @Column({ nullable: true })
   logo_url: string;
 
-  @Column({ default: true })
+  @Column({ default: 'activo' })
   estado: string;
 
 

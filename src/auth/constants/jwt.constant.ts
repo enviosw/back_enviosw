@@ -1,6 +1,10 @@
+// src/config/jwtConstants.ts
+import * as dotenv from 'dotenv';
+dotenv.config(); // ✅ Cargar primero
+
 export const jwtConstants = {
-  accessTokenSecret: 'ACCESS_SECRET',
-  refreshTokenSecret: 'REFRESH_SECRET',
-  accessTokenExpiration: '15m',
-  refreshTokenExpiration: '7d',
+  accessTokenSecret: process.env.ACCESS_TOKEN_SECRET,
+  refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET,
+  accessTokenExpiration: process.env.ACCESS_TOKEN_EXPIRATION,
+  refreshTokenExpiration: process.env.REFRESH_TOKEN_EXPIRATION,
 };

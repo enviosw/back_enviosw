@@ -17,11 +17,13 @@ export class ComerciosService {
   async create(dto: CreateComercioDto): Promise<Comercio> {
     const comercio = this.comercioRepo.create({
       ...dto,
+      estado: dto.estado ?? 'activo', // 👈 valor por defecto si no viene
       servicio: { id: dto.servicio_id, estado: 'activo' },
     });
 
     return await this.comercioRepo.save(comercio);
   }
+
 
   async searchAll(search: string) {
     const qb = this.comercioRepo

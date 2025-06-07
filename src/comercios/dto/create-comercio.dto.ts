@@ -10,17 +10,17 @@ import {
 
 export class CreateComercioDto {
   @IsString()
-  @Length(3, 150)
+  @Length(1, 150)
   @IsNotEmpty()
   nombre_comercial: string;
 
   @IsString()
-  @Length(3, 200)
+  @Length(1, 200)
   @IsNotEmpty()
   razon_social: string;
 
   @IsString()
-  @Length(5, 20)
+  @Length(4, 20)
   @IsNotEmpty()
   nit: string;
 
