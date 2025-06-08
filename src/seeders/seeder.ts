@@ -72,15 +72,15 @@ async function seedServicios(app) {
   const serviciosService = app.get(ServiciosService);
 
   const serviciosData = [
-    { nombre: 'Restaurantes', estado: 'activo', icon: 'FaUtensils', color: '#2B7FFF', foto: 'res.png', orden: 5 },
+    { nombre: 'Restaurantes', estado: 'activo', icon: 'FaUtensils', color: '#2B7FFF', foto: 'res.png', orden: 3 },
     { nombre: 'Detalles', estado: 'activo', icon: 'FaGift', color: '#00C950', foto: 'det.png', orden: 8 },
     { nombre: 'Droguerías', estado: 'activo', icon: 'FaPills', color: '#F0B100', foto: 'dro.png', orden: 6 },
     { nombre: 'Almacenes', estado: 'activo', icon: 'FaWarehouse', color: '#AD46FF', foto: 'alm.png', orden: 7 },
     { nombre: 'Licores', estado: 'activo', icon: 'FaGlassCheers', color: '#009966', foto: 'lic.png', orden: 9 },
     { nombre: 'Recogidas', estado: 'inactivo', icon: 'FaTruck', color: '#FB2C36', foto: 'rec.png', orden: 1 },
     { nombre: 'Compras', estado: 'inactivo', icon: 'FaShoppingCart', color: '#FF6900', foto: 'com.png', orden: 2 },
-    { nombre: 'Pagos', estado: 'inactivo', icon: 'FaCreditCard', color: '#615FFF', foto: 'pag.png', orden: 3 },
-    { nombre: 'Envíos', estado: 'inactivo', icon: 'FaParachuteBox', color: '#00BBA7', foto: 'env.png', orden: 4 },
+    { nombre: 'Pagos', estado: 'inactivo', icon: 'FaCreditCard', color: '#615FFF', foto: 'pag.png', orden: 4 },
+    { nombre: 'Envíos', estado: 'inactivo', icon: 'FaParachuteBox', color: '#00BBA7', foto: 'env.png', orden: 5 },
   ];
 
   for (const servicio of serviciosData) {
