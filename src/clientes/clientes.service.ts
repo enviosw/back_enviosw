@@ -67,7 +67,7 @@ export class ClientesService {
       const inicio = new Date(query.fechaInicio + 'T00:00:00'); // ISO formato seguro
       clientes.andWhere('cliente.fecha_creacion >= :inicio', { inicio });
     }
-    
+
     if (query.fechaFin) {
       const fin = new Date(query.fechaFin + 'T23:59:59.999'); // Final del día
       clientes.andWhere('cliente.fecha_creacion <= :fin', { fin });
@@ -108,14 +108,14 @@ export class ClientesService {
   }
 
   async update(id: number, updateClienteDto: UpdateClienteDto) {
-    
+
     const { rol_id, ...resto } = updateClienteDto;
 
     const cliente = await this.clienteRepository.findOneBy({ id });
     if (!cliente) {
       throw new NotFoundException(`El cliente ${updateClienteDto.nombre} no encontrado para actualizarlo.`);
     }
-    
+
     const clienteActualizado = { ...cliente, ...resto };
     if (rol_id) {
       clienteActualizado.rol = { id: rol_id } as any; // Solo enlaza por ID sin cargar todo el comercio
@@ -124,7 +124,7 @@ export class ClientesService {
     return this.clienteRepository.save(clienteActualizado);
   }
 
-  async hideClientes(ids:number[]){
+  async hideClientes(ids: number[]) {
     return await this.clienteRepository.update(
       { id: In(ids) },
       { estado: 'inactivo' }
@@ -141,4 +141,25 @@ export class ClientesService {
     await this.clienteRepository.remove(cliente);
     return `Este cliente con ID #${id} ha sido eliminado`;
   }
+
+
+  async toggleEstados(ids: number[]): Promise<{ actualizados: number[] }> {
+    const clientes = await this.clienteRepository.findBy({ id: In(ids) });
+
+    if (!clientes.length) {
+      throw new NotFoundException('No se encontraron clientes con los IDs proporcionados');
+    }
+
+    const actualizados = clientes.map(cliente => {
+      cliente.estado = cliente.estado === 'activo' ? 'inactivo' : 'activo';
+      return cliente;
+    });
+
+    await this.clienteRepository.save(actualizados);
+
+    return {
+      actualizados: actualizados.map(c => c.id),
+    };
+  }
+
 }

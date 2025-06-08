@@ -257,4 +257,25 @@ export class ComerciosService {
   }
 
 
+  async toggleEstados(ids: number[]): Promise<{ actualizados: number[] }> {
+    const comercios = await this.comercioRepo.findBy({ id: In(ids) });
+
+    if (!comercios.length) {
+      throw new NotFoundException('No se encontraron comercios con los IDs proporcionados');
+    }
+
+    const actualizados = comercios.map((comercio) => {
+      comercio.estado = comercio.estado === 'activo' ? 'inactivo' : 'activo';
+      return comercio;
+    });
+
+    await this.comercioRepo.save(actualizados);
+
+    return {
+      actualizados: actualizados.map((c) => c.id),
+    };
+  }
+
+
+
 }

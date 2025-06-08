@@ -82,6 +82,16 @@ export class ComerciosController {
     return this.comerciosService.searchAll(search);
   }
 
+
+  @Patch('toggle-estados')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
+  async toggleEstados(@Body('ids') ids: number[]) {
+    return this.comerciosService.toggleEstados(ids);
+  }
+
+
+
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.comerciosService.findOne(id);
