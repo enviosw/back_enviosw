@@ -140,6 +140,7 @@ export class ComerciosController {
     @Param('id', ParseIntPipe) id: number,
     @Body() horarios: any, // Se espera un objeto con los horarios a actualizar
   ) {
+    console.log(horarios)
     return this.comerciosService.updateHorarios(id, horarios);
   }
 
