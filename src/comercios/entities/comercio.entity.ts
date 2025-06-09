@@ -57,26 +57,27 @@ export class Comercio {
   activar_numero: number; // 0 = inactivo, 1 = activo
 
   // Nueva columna para horarios (almacena datos JSON)
+
   @Column('jsonb', {
     nullable: true,
     default: {
-      lunes: { apertura: '07:00 AM', cierre: '10:30 PM' },
-      martes: { apertura: '07:00 AM', cierre: '10:30 PM' },
-      miercoles: { apertura: '07:00 AM', cierre: '10:30 PM' },
-      jueves: { apertura: '07:00 AM', cierre: '10:30 PM' },
-      viernes: { apertura: '07:00 AM', cierre: '10:30 PM' },
-      sabado: { apertura: '07:00 AM', cierre: '10:30 PM' },
-      domingo: { apertura: '07:00 AM', cierre: '10:00 PM' },
+      horarios: [
+        { dia: 'lunes', apertura: '07:00 AM', cierre: '04:30 PM' },
+        { dia: 'martes', apertura: '07:00 AM', cierre: '04:30 PM' },
+        { dia: 'miercoles', apertura: '07:00 AM', cierre: '04:30 PM' },
+        { dia: 'jueves', apertura: '07:00 AM', cierre: '04:30 PM' },
+        { dia: 'viernes', apertura: '07:00 AM', cierre: '04:30 PM' },
+        { dia: 'sabado', apertura: '07:00 AM', cierre: '04:30 PM' },
+        { dia: 'domingo', apertura: '07:00 AM', cierre: '11:30 PM' }
+      ]
     }
   })
   horarios: {
-    lunes: { apertura: string, cierre: string };
-    martes: { apertura: string, cierre: string };
-    miercoles: { apertura: string, cierre: string };
-    jueves: { apertura: string, cierre: string };
-    viernes: { apertura: string, cierre: string };
-    sabado: { apertura: string, cierre: string };
-    domingo: { apertura: string, cierre: string };
+    horarios: {
+      dia: string;
+      apertura: string;
+      cierre: string;
+    }[];
   };
 
   // Columna para el estado del comercio (abierto o cerrado)

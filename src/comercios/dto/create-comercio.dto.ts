@@ -59,18 +59,6 @@ export class CreateComercioDto {
   @IsOptional()
   estado?: string;
 
-  // Nuevos campos para los horarios
-  @IsOptional()
-  @IsObject()
-  horarios?: {
-    lunes: { apertura: string, cierre: string };
-    martes: { apertura: string, cierre: string };
-    miercoles: { apertura: string, cierre: string };
-    jueves: { apertura: string, cierre: string };
-    viernes: { apertura: string, cierre: string };
-    sabado: { apertura: string, cierre: string };
-    domingo: { apertura: string, cierre: string };
-  };
 
   // Campo para el estado de comercio (abierto o cerrado)
   @IsOptional()
