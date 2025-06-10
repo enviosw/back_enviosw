@@ -7,4 +7,6 @@ export const jwtConstants = {
   refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET,
   accessTokenExpiration: process.env.ACCESS_TOKEN_EXPIRATION,
   refreshTokenExpiration: process.env.REFRESH_TOKEN_EXPIRATION,
+  apiWhatsapp: process.env.WHATSAPP_TOKEN,
+  numberPrueba: process.env.NUMBER_PRUEBA,
 };

@@ -13,6 +13,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { ClientesModule } from './clientes/clientes.module';
 import { ImagenesModule } from './imagenes/imagenes.module';
+import { WhatsappModule } from './whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -60,6 +61,8 @@ import { ImagenesModule } from './imagenes/imagenes.module';
     ProductosModule,
 
     ImagenesModule,
+
+    WhatsappModule,
   ],
 })
 export class AppModule { }
