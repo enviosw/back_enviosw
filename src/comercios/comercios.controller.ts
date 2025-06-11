@@ -82,9 +82,17 @@ export class ComerciosController {
     return this.comerciosService.searchAll(search);
   }
 
-  @Get(':id')
+
+  @Patch('toggle-estados')
   @UseGuards(AuthGuard, RolesGuard)
   @Roles('administrador')
+  async toggleEstados(@Body('ids') ids: number[]) {
+    return this.comerciosService.toggleEstados(ids);
+  }
+
+
+
+  @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.comerciosService.findOne(id);
   }
@@ -132,6 +140,17 @@ export class ComerciosController {
     @Param('id', ParseIntPipe) id: number,
     @Body() horarios: any, // Se espera un objeto con los horarios a actualizar
   ) {
+    console.log(horarios)
     return this.comerciosService.updateHorarios(id, horarios);
   }
+
+
+  @Patch(':id/toggle-activar-numero')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
+  async toggleActivarNumero(@Param('id', ParseIntPipe) id: number) {
+    return this.comerciosService.toggleActivarNumero(id);
+  }
+
+
 }

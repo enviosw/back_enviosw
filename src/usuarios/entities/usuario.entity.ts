@@ -22,7 +22,7 @@ export class Usuario {
   @Column({ name: 'email', unique: true })
   email: string;
 
-  @Column({ name: 'password', select: false })
+  @Column({ name: 'password' })
   password: string;
 
   @Column({ name: 'rol', default: 'usuario' })

@@ -107,11 +107,10 @@ export class UsuariosService {
     const usuario = await this.findOne(id);
     const { comercio_id, password, ...resto } = updateUsuarioDto;
 
-    // Creamos el objeto final que vamos a mergear
     const datosActualizar: Partial<Usuario> = { ...resto };
 
-    // Hashear la contraseña solo si viene y actualizar
-    if (password) {
+    // Solo actualiza la contraseña si no está vacía
+    if (password && password.trim() !== '') {
       datosActualizar.password = await bcrypt.hash(password, 10);
     }
 
@@ -132,4 +131,25 @@ export class UsuariosService {
     const usuario = await this.findOne(id);
     await this.usuarioRepository.remove(usuario);
   }
+
+
+  async toggleEstados(ids: number[]): Promise<{ actualizados: number[] }> {
+  const usuarios = await this.usuarioRepository.findByIds(ids);
+
+  if (!usuarios.length) {
+    throw new NotFoundException('No se encontraron usuarios con los IDs proporcionados');
+  }
+
+  const actualizados = usuarios.map((usuario) => {
+    usuario.estado = usuario.estado === 'activo' ? 'inactivo' : 'activo';
+    return usuario;
+  });
+
+  await this.usuarioRepository.save(actualizados);
+
+  return {
+    actualizados: actualizados.map((u) => u.id),
+  };
+}
+
 }

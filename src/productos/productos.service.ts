@@ -7,6 +7,8 @@ import { CreateProductoDto } from './dto/create-producto.dto';
 import { ComerciosService } from '../comercios/comercios.service';
 import { CategoriasService } from '../categorias/categorias.service';
 import { ProductoQuery } from './interfaces/producto-query.interface';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class ProductosService {
@@ -159,6 +161,22 @@ export class ProductosService {
   async update(id: number, updateProductoDto: CreateProductoDto): Promise<Producto> {
     const producto = await this.findOne(id);
 
+    // Verificar si se ha actualizado la imagen
+    if (updateProductoDto.imagen_url && updateProductoDto.imagen_url !== producto.imagen_url) {
+      const oldImagePath = path.join(process.cwd(), 'uploads', producto.imagen_url);
+
+      if (fs.existsSync(oldImagePath)) {
+        try {
+          fs.unlinkSync(oldImagePath);
+          console.log(`🧹 Imagen anterior eliminada: ${producto.imagen_url}`);
+        } catch (err) {
+          console.error('❌ Error eliminando la imagen anterior:', err);
+        }
+      }
+
+      producto.imagen_url = updateProductoDto.imagen_url;
+    }
+
     if (updateProductoDto.categoriaId) {
       const categoria = await this.categoriaServices.findOne(updateProductoDto.categoriaId);
       if (!categoria) throw new Error('Categoría no encontrada');
@@ -175,11 +193,8 @@ export class ProductosService {
       ...updateProductoDto,
       estado: updateProductoDto.estado || producto.estado,
       estado_descuento: updateProductoDto.estado_descuento || producto.estado_descuento,
-      imagen_url: updateProductoDto.imagen_url || producto.imagen_url,
     });
 
     return this.productosRepository.save(producto);
   }
-
-
 }

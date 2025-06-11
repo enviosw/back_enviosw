@@ -37,15 +37,11 @@ export class ProductosController {
   }
 
   @Get()
-  @UseGuards(AuthGuard, RolesGuard)
-  @Roles('aliado')
   findAll(@Query() query: ProductoQuery) {
     return this.productosService.findAll(query);
   }
 
   @Get('comercio')
-  @UseGuards(AuthGuard, RolesGuard)
-  @Roles('aliado')
   async findAllProductos(
     @Query('comercio_id') comercioId: number,
     @Query('categoria_id') categoriaId?: number,

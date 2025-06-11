@@ -27,6 +27,14 @@ export class UsuariosController {
     return this.usuariosService.findAll(query);
   }
 
+  @Patch('toggle-estados')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
+  async toggleEstados(@Body('ids') ids: number[]) {
+    return this.usuariosService.toggleEstados(ids);
+  }
+
+
   // Obtener un usuario por ID
   @Get(':id')
   @UseGuards(AuthGuard, RolesGuard)

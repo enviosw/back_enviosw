@@ -23,6 +23,15 @@ export class ClientesController {
     return this.clientesService.findAll(query);
   }
 
+
+  @Patch('toggle-estados')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
+  async toggleEstados(@Body('ids') ids: number[]) {
+    return this.clientesService.toggleEstados(ids);
+  }
+
+
   @Get(':id')
   @UseGuards(AuthGuard, RolesGuard)
   @Roles('administrador')

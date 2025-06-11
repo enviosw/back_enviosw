@@ -4,7 +4,8 @@ import { Transform } from 'class-transformer';
 export class CreateProductoDto {
   @IsString()
   readonly nombre: string;
-
+  
+  @IsOptional()
   @IsString()
   readonly descripcion: string;
 
@@ -27,6 +28,7 @@ export class CreateProductoDto {
   @IsEnum(['activo', 'inactivo'])
   readonly estado_descuento?: string;
 
+  @IsOptional()
   @IsString()
   readonly unidad: string;
 
