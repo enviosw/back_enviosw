@@ -161,21 +161,26 @@ export class ProductosService {
   async update(id: number, updateProductoDto: CreateProductoDto): Promise<Producto> {
     const producto = await this.findOne(id);
 
-    // Verificar si se ha actualizado la imagen
-    if (updateProductoDto.imagen_url && updateProductoDto.imagen_url !== producto.imagen_url) {
-      const oldImagePath = path.join(process.cwd(), 'uploads', producto.imagen_url);
 
-      if (fs.existsSync(oldImagePath)) {
-        try {
-          fs.unlinkSync(oldImagePath);
-          console.log(`🧹 Imagen anterior eliminada: ${producto.imagen_url}`);
-        } catch (err) {
-          console.error('❌ Error eliminando la imagen anterior:', err);
+    if (producto.imagen_url) {
+      if (updateProductoDto.imagen_url && updateProductoDto.imagen_url !== producto.imagen_url) {
+        const oldImagePath = path.join(process.cwd(), 'uploads', producto.imagen_url);
+
+        if (fs.existsSync(oldImagePath)) {
+          try {
+            fs.unlinkSync(oldImagePath);
+            console.log(`🧹 Imagen anterior eliminada: ${producto.imagen_url}`);
+          } catch (err) {
+            console.error('❌ Error eliminando la imagen anterior:', err);
+          }
         }
-      }
 
-      producto.imagen_url = updateProductoDto.imagen_url;
+        producto.imagen_url = updateProductoDto.imagen_url;
+      }
     }
+
+    // Verificar si se ha actualizado la imagen
+
 
     if (updateProductoDto.categoriaId) {
       const categoria = await this.categoriaServices.findOne(updateProductoDto.categoriaId);
