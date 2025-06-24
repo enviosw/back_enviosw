@@ -61,7 +61,7 @@ export class ComerciosService {
 
   // Obtener todos los comercios
   async findAll(query: ComercioQuery) {
-    const take = 20;
+    const take = 30;
     const skip = (query.page - 1) * take;
 
     const qb = this.comercioRepo
@@ -150,7 +150,7 @@ export class ComerciosService {
     search: string = '',
     page: number = 1,
   ): Promise<{ data: Comercio[]; total: number; page: number; lastPage: number }> {
-    const take = 30;
+    const take = 50;
     const skip = (page - 1) * take;
 
     const subQb = this.comercioRepo
