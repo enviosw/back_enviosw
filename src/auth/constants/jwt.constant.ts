@@ -7,6 +7,12 @@ export const jwtConstants = {
   refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET,
   accessTokenExpiration: process.env.ACCESS_TOKEN_EXPIRATION,
   refreshTokenExpiration: process.env.REFRESH_TOKEN_EXPIRATION,
-  apiWhatsapp: process.env.WHATSAPP_TOKEN,
-  numberPrueba: process.env.NUMBER_PRUEBA,
+};
+
+export const whatsappConstants = {
+  verifyToken: process.env.WEBHOOK_VERIFY_TOKEN,
+  apiToken: process.env.WHATSAPP_TOKEN,
+  phoneId: process.env.NUMBER_PRUEBA,
+  apiVersion: process.env.API_VERSION,
+  baseUrl: process.env.BASE_URL,
 };

@@ -14,6 +14,7 @@ import { join } from 'path';
 import { ClientesModule } from './clientes/clientes.module';
 import { ImagenesModule } from './imagenes/imagenes.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { ChatbotModule } from './chatbot/chatbot.module';
 
 @Module({
   imports: [
@@ -63,6 +64,8 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     ImagenesModule,
 
     WhatsappModule,
+
+    ChatbotModule,
   ],
 })
 export class AppModule { }
