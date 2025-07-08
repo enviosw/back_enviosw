@@ -2,12 +2,12 @@
 import { Injectable } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { jwtConstants } from 'src/auth/constants/jwt.constant';
+import { whatsappConstants } from 'src/auth/constants/jwt.constant';
 
 @Injectable()
 export class WhatsappService {
-  private readonly token = jwtConstants.apiWhatsapp; // 🔐 Token de acceso (env)
-  private readonly phoneNumberId = jwtConstants.numberPrueba; // ID del número emisor
+  private readonly token = whatsappConstants.apiToken; // 🔐 Token de acceso (env)
+  private readonly phoneNumberId = "assaas"; // ID del número emisor
 
   constructor(private readonly httpService: HttpService) {}
 
