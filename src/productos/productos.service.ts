@@ -101,7 +101,7 @@ export class ProductosService {
     search: string = '',
     page: number = 1,
   ): Promise<{ data: Producto[]; total: number; page: number; lastPage: number }> {
-    const take = 25;
+    const take = 15;
     const skip = (page - 1) * take;
 
     const qb = this.productosRepository
