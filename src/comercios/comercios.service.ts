@@ -150,7 +150,7 @@ export class ComerciosService {
     search: string = '',
     page: number = 1,
   ): Promise<{ data: Comercio[]; total: number; page: number; lastPage: number }> {
-    const take = 50;
+    const take = 20;
     const skip = (page - 1) * take;
 
     const subQb = this.comercioRepo
