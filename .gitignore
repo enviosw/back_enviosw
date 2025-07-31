@@ -4,6 +4,10 @@
 /build
 uploads/*
 
+src/backups/
+src/migrations/*.ts
+
+
 # Logs
 logs
 *.log
