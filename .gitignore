@@ -8,6 +8,10 @@ src/backups/
 src/migrations/*.ts
 
 
+src/backups/
+src/migrations/*.ts
+
+
 # Logs
 logs
 *.log

@@ -16,6 +16,7 @@ import { ImagenesModule } from './imagenes/imagenes.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { ChatbotModule } from './chatbot/chatbot.module';
 import { DomiliariosModule } from './domiliarios/domiliarios.module';
+import { DomiciliosModule } from './domicilios/domicilios.module';
 
 @Module({
   imports: [
@@ -69,6 +70,8 @@ import { DomiliariosModule } from './domiliarios/domiliarios.module';
     ChatbotModule,
 
     DomiliariosModule,
+
+    DomiciliosModule,
   ],
 })
 export class AppModule { }
