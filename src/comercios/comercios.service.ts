@@ -277,5 +277,24 @@ export class ComerciosService {
   }
 
 
+  async findByTelefono(telefono: string): Promise<{ nombre: string; telefono: string; direccion: string }> {
+    const comercio = await this.comercioRepo
+      .createQueryBuilder('comercio')
+      .select(['comercio.nombre_comercial', 'comercio.telefono', 'comercio.direccion'])
+      .where('TRIM(comercio.telefono) = :telefono', { telefono })
+      .getOne();
+
+    if (!comercio) {
+      throw new NotFoundException(`No se encontró un comercio con el teléfono ${telefono}`);
+    }
+
+    return {
+      nombre: comercio.nombre_comercial,
+      telefono: comercio.telefono,
+      direccion: comercio.direccion,
+    };
+  }
+
+
 
 }

@@ -1,9 +1,13 @@
 import { Module } from '@nestjs/common';
-import { DomiliariosService } from './domiliarios.service';
-import { DomiliariosController } from './domiliarios.controller';
+import { DomiciliariosService } from './domiliarios.service';
+import { DomiciliariosController } from './domiliarios.controller';
+import { Domiciliario } from './entities/domiliario.entity';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 @Module({
-  controllers: [DomiliariosController],
-  providers: [DomiliariosService],
+  imports: [TypeOrmModule.forFeature([Domiciliario])],
+  controllers: [DomiciliariosController],
+  providers: [DomiciliariosService],
+  exports: [DomiciliariosService],
 })
-export class DomiliariosModule {}
+export class DomiliariosModule { }

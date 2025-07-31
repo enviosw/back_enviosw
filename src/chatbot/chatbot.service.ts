@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ComerciosService } from 'src/comercios/comercios.service';
 import { axiosWhatsapp } from 'src/common/axios-whatsapp.instance';
+import { DomiciliosService } from 'src/domicilios/domicilios.service';
+import { DomiciliariosService } from 'src/domiliarios/domiliarios.service';
+import { Domiciliario } from 'src/domiliarios/entities/domiliario.entity';
+
 
 const estadoUsuarios = new Map<string, any>();
 const temporizadoresInactividad = new Map<string, NodeJS.Timeout>(); // ⏰ Temporizadores
@@ -20,7 +25,13 @@ export class ChatbotService {
 
     private readonly logger = new Logger(ChatbotService.name);
 
+    constructor(
+        private readonly comerciosService: ComerciosService, // 👈 Aquí está la inyección
+        private readonly domiciliarioService: DomiciliariosService, // 👈 Aquí está la inyección
+        private readonly domiciliosService: DomiciliosService, // 👈 Aquí está la inyección
 
+
+    ) { }
 
 
     async procesarMensajeEntrante(body: any): Promise<void> {
@@ -41,6 +52,49 @@ export class ChatbotService {
         const numero = mensaje?.from;
         const texto = mensaje?.text?.body;
         const nombre = value?.contacts?.[0]?.profile?.name ?? 'cliente';
+
+
+        const esDomiciliario = await this.domiciliarioService.esDomiciliario(numero);
+
+        // Solo mostrar botones si NO es respuesta interactiva (para evitar bucle)
+        if (esDomiciliario && tipo !== 'interactive') {
+            await this.enviarMensajeTexto(numero, '👋 Hola, ¿qué estado deseas establecer?');
+
+            await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: numero,
+                type: 'interactive',
+                interactive: {
+                    type: 'button',
+                    body: {
+                        text: 'Selecciona tu estado actual:',
+                    },
+                    action: {
+                        buttons: [
+                            {
+                                type: 'reply',
+                                reply: {
+                                    id: 'disponible',
+                                    title: '✅ Disponible',
+                                },
+                            },
+                            {
+                                type: 'reply',
+                                reply: {
+                                    id: 'no_disponible',
+                                    title: '🛑 No disponible',
+                                },
+                            },
+                        ],
+                    },
+                },
+            });
+
+            return;
+        }
+
+
+
 
         // 🧠 Obtener o inicializar estado del usuario
         let estado = estadoUsuarios.get(numero);
@@ -76,38 +130,304 @@ export class ChatbotService {
 📲 Pide tu servicio ingresando a nuestra página web:
 🌐 https://domiciliosw.com/`
             );
+            await this.enviarSticker(numero, '3908588892738247');
 
             await this.enviarListaOpciones(numero);
             return; // Evita que se siga ejecutando el flujo anterior
         }
 
+        if (tipo === 'sticker') {
+            const sha = mensaje?.sticker?.sha256;
+            const STICKER_EMPRESA_SHA = '8Tno525We2epSZU4qLJ/E5+u/7NSBK9kkyW9sQ2Uvqw=';
+
+            this.logger.log(`📎 SHA del sticker recibido: ${sha}`);
+
+            const numeroLimpio = numero.startsWith('57') ? numero.slice(2) : numero;
+
+            if (sha === STICKER_EMPRESA_SHA) {
+                try {
+                    const comercio = await this.comerciosService.findByTelefono(numeroLimpio);
+
+                    await this.enviarMensajeTexto(
+                        numero,
+                        `🎉 ¡Gracias por usar nuestro *sticker oficial*! 🎉\n\n📍 *Comercio detectado:*\n🏪 ${comercio.nombre}\n📞 ${comercio.telefono}\n📌 ${comercio.direccion}`
+                    );
+                } catch (error) {
+                    await this.enviarMensajeTexto(numero, '🎉 ¡Gracias por usar nuestro *sticker oficial*!');
+                    this.logger.warn(`⚠️ No se encontró comercio para el número: ${numeroLimpio}`);
+                }
+            } else {
+                await this.enviarMensajeTexto(numero, '📎 ¡Gracias por tu sticker!');
+            }
+
+            return;
+        }
+
+
+
+        //         if (mensaje?.interactive?.type === 'button_reply') {
+        //             const id = mensaje.interactive.button_reply.id;
+
+
+        //             if (id === 'disponible' || id === 'no_disponible') {
+        //                 const disponible = id === 'disponible';
+
+        //                 try {
+        //                     await this.domiciliarioService.cambiarDisponibilidadPorTelefono(numero, disponible);
+
+        //                     await this.enviarMensajeTexto(
+        //                         numero,
+        //                         `✅ Estado actualizado. Ahora estás como *${disponible ? 'DISPONIBLE' : 'NO DISPONIBLE'}*.`
+        //                     );
+        //                 } catch (error) {
+        //                     this.logger.warn(`⚠️ Error al cambiar disponibilidad: ${error.message}`);
+        //                     await this.enviarMensajeTexto(numero, '❌ No se encontró tu perfil como domiciliario.');
+        //                 }
+
+        //                 // 🧹 Finaliza conversación y limpia estado
+        //                 estadoUsuarios.delete(numero);
+
+        //                 if (temporizadoresInactividad.has(numero)) {
+        //                     clearTimeout(temporizadoresInactividad.get(numero));
+        //                     temporizadoresInactividad.delete(numero);
+        //                 }
+
+        //                 await this.enviarMensajeTexto(
+        //                     numero,
+        //                     '👋 Gracias por actualizar tu estado. Puedes escribir *hola* si necesitas algo más.'
+        //                 );
+
+        //                 return;
+        //             }
+
+
+
+        //             // Confirmaciones
+        //             if (id === 'confirmar_info' || id === 'confirmar_pago' || id === 'confirmar_compra') {
+        //                 try {
+        //                     const domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
+
+        //                     const estado = estadoUsuarios.get(numero);
+        //                     const datos = estado?.datos || {};
+        //                     const tipo = estado?.tipo || 'servicio';
+
+        //                     const resumenCliente = `✅ Ya enviamos un domiciliario para ti:
+
+        // 👤 *${domiciliario.nombre} ${domiciliario.apellido}*
+        // 🧥 Chaqueta: *${domiciliario.numero_chaqueta}*
+        // 📞 WhatsApp: *${domiciliario.telefono_whatsapp}*
+
+        // 🚀 Está en camino. Gracias por usar *Domicilios W* 🛵💨`;
+
+        //                     await this.enviarMensajeTexto(numero, resumenCliente);
+
+        //                     const resumenPedido = this.generarResumenPedido(datos, tipo, nombre, numero);
+
+        //                     // 📤 Validar número del domiciliario
+        //                     const telefonoDomiciliario = domiciliario.telefono_whatsapp;
+
+        //                     const mensajeDomiciliario = `📦 *Nuevo pedido asignado*
+
+        // ${resumenPedido}
+
+        // 👤 Cliente: *${nombre}*
+        // 📞 WhatsApp: ${numero.startsWith('+') ? numero : '+57' + numero.slice(-10)}`;
+
+        //                     this.logger.log(`📤 Enviando pedido al domiciliario ${telefonoDomiciliario}`);
+
+        //                     await this.enviarMensajeTexto(telefonoDomiciliario, mensajeDomiciliario);
+
+        //                     this.logger.log(`✅ Mensaje enviado al domiciliario ${telefonoDomiciliario}`);
+
+        //                     await this.enviarMensajeTexto(numero, '✅ El chat ha finalizado. Puedes escribir *hola* para comenzar de nuevo.');
+
+        //                     await this.domiciliosService.create({
+        //                     mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
+        //                     estado: 1, // aprobado
+        //                     numero_cliente: numero,
+        //                     fecha: new Date().toISOString(),
+        //                     hora: new Date().toTimeString().slice(0, 5), // Ej: "14:32"
+        //                     id_cliente: null,
+        //                     id_domiciliario: domiciliario.id,
+        //                     tipo_servicio: tipo.replace('opcion_', ''),
+
+        //                     origen_direccion: datos.direccionRecoger ?? '',
+        //                     destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
+        //                     telefono_contacto_origen: datos.telefonoRecoger ?? '',
+        //                     telefono_contacto_destino: datos.telefonoEntregar ?? datos.telefonoEntrega ?? '',
+
+        //                     notas: '',
+        //                     detalles_pedido: datos.listaCompras ?? '',
+        //                     foto_entrega_url: '',
+        //                     });
+
+
+        //                     estadoUsuarios.delete(numero);
+
+        //                 } catch (error) {
+        //                     this.logger.error('❌ Error al asignar domiciliario o enviar mensajes:', error.response?.data || error.message);
+        //                     await this.enviarMensajeTexto(numero, '❌ Ocurrió un error al asignar el domiciliario. Por favor intenta de nuevo.');
+        //                 }
+
+        //                 return;
+        //             }
+
+
+
+        //             // Ediciones
+        //             if (id === 'editar_info') {
+        //                 await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información. Empecemos de nuevo...');
+        //                 estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_1' });
+        //                 await this.opcion1PasoAPaso(numero, '');
+        //                 return;
+        //             }
+
+
+        //             if (id === 'editar_compra') {
+        //                 const tipo = estadoUsuarios.get(numero)?.tipo;
+        //                 if (tipo === 'opcion_2') {
+        //                     await this.enviarMensajeTexto(numero, '🔁 Vamos a actualizar tu lista de compras...');
+        //                     estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_2' });
+        //                     await this.opcion2PasoAPaso(numero, '');
+        //                 } else if (tipo === 'opcion_3') {
+        //                     await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información del pago...');
+        //                     estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_3' });
+        //                     await this.opcion3PasoAPaso(numero, '');
+        //                 } else {
+        //                     await this.enviarMensajeTexto(numero, '❓ No se pudo identificar el tipo de flujo para editar.');
+        //                 }
+        //                 return;
+        //             }
+        //         }
+
         if (mensaje?.interactive?.type === 'button_reply') {
             const id = mensaje.interactive.button_reply.id;
 
-            if (id === 'confirmar_info' || id === 'confirmar_pago' || id === 'confirmar_compra') {
+            // 🔄 Actualizar estado del domiciliario
+            if (id === 'disponible' || id === 'no_disponible') {
+                const disponible = id === 'disponible';
+
+                try {
+                    await this.domiciliarioService.cambiarDisponibilidadPorTelefono(numero, disponible);
+
+                    await this.enviarMensajeTexto(
+                        numero,
+                        `✅ Estado actualizado. Ahora estás como *${disponible ? 'DISPONIBLE' : 'NO DISPONIBLE'}*.`
+                    );
+                } catch (error) {
+                    this.logger.warn(`⚠️ Error al cambiar disponibilidad: ${error.message}`);
+                    await this.enviarMensajeTexto(numero, '❌ No se encontró tu perfil como domiciliario.');
+                }
+
+                // 🧹 Finaliza conversación y limpia estado
+                estadoUsuarios.delete(numero);
+
+                if (temporizadoresInactividad.has(numero)) {
+                    clearTimeout(temporizadoresInactividad.get(numero));
+                    temporizadoresInactividad.delete(numero);
+                }
+
                 await this.enviarMensajeTexto(
                     numero,
-                    `✅ Listo, ya enviamos un domiciliario:\n👤 *Juliano*\n🧥 Número de chaqueta: *15*\n\n🏠 A la dirección que me enviaste.`
+                    '👋 Gracias por actualizar tu estado. Puedes escribir *hola* si necesitas algo más.'
                 );
 
-                await this.enviarMensajeTexto(numero, '✅ Gracias por preferirnos. El chat ha finalizado. Puedes escribir *hola* para comenzar de nuevo.');
-                estadoUsuarios.delete(numero);
                 return;
             }
 
+            // ✅ Confirmaciones de pedido
+            if (id === 'confirmar_info' || id === 'confirmar_pago' || id === 'confirmar_compra') {
+                let domiciliario: Domiciliario | null = null;
+
+                let resumenCliente = '';
+
+                const estado = estadoUsuarios.get(numero);
+                const datos = estado?.datos || {};
+                const tipo = estado?.tipo || 'servicio';
+
+                try {
+                    domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
+
+                    resumenCliente = `✅ Ya enviamos un domiciliario para ti:
+
+👤 *${domiciliario.nombre} ${domiciliario.apellido}*
+🧥 Chaqueta: *${domiciliario.numero_chaqueta}*
+📞 WhatsApp: *${domiciliario.telefono_whatsapp}*
+
+🚀 Está en camino. Gracias por usar *Domicilios W* 🛵💨`;
+
+                    await this.enviarMensajeTexto(numero, resumenCliente);
+
+                    const resumenPedido = this.generarResumenPedido(datos, tipo, nombre, numero);
+
+                    const telefonoDomiciliario = domiciliario.telefono_whatsapp;
+                    const mensajeDomiciliario = `📦 *Nuevo pedido asignado*
+
+${resumenPedido}
+
+👤 Cliente: *${nombre}*
+📞 WhatsApp: ${numero.startsWith('+') ? numero : '+57' + numero.slice(-10)}`;
+
+                    this.logger.log(`📤 Enviando pedido al domiciliario ${telefonoDomiciliario}`);
+                    await this.enviarMensajeTexto(telefonoDomiciliario, mensajeDomiciliario);
+                    this.logger.log(`✅ Mensaje enviado al domiciliario ${telefonoDomiciliario}`);
+                } catch (error) {
+                    this.logger.warn('⚠️ No hay domiciliarios disponibles en este momento.');
+                    resumenCliente = `🕐 *En breve uno de nuestros domiciliarios tomará tu pedido*.
+Gracias por usar *Domicilios W* 🛵💨`;
+                    await this.enviarMensajeTexto(numero, resumenCliente);
+                }
+
+                // 🔐 Registrar el pedido incluso si no hay domiciliario
+                await this.domiciliosService.create({
+                    mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
+                    estado: domiciliario ? 1 : 0, // 1 = asignado, 0 = pendiente
+                    numero_cliente: numero,
+                    fecha: new Date().toISOString(),
+                    hora: new Date().toTimeString().slice(0, 5),
+                    id_cliente: null,
+                    id_domiciliario: domiciliario?.id ?? null,
+                    tipo_servicio: tipo.replace('opcion_', ''),
+                    origen_direccion: datos.direccionRecoger ?? '',
+                    destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
+                    telefono_contacto_origen: datos.telefonoRecoger ?? '',
+                    telefono_contacto_destino: datos.telefonoEntregar ?? datos.telefonoEntrega ?? '',
+                    notas: '',
+                    detalles_pedido: datos.listaCompras ?? '',
+                    foto_entrega_url: '',
+                });
+
+                await this.enviarMensajeTexto(numero, '✅ El chat ha finalizado. Puedes escribir *hola* para comenzar de nuevo.');
+                estadoUsuarios.delete(numero);
+
+                return;
+            }
+
+            // ✏️ Editar información
             if (id === 'editar_info') {
-                // Reiniciar flujo de opción 1
+                await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información. Empecemos de nuevo...');
                 estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_1' });
-                await this.opcion1PasoUnico(numero, '');
+                await this.opcion1PasoAPaso(numero, '');
                 return;
             }
 
             if (id === 'editar_compra') {
-                estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_2' });
-                await this.opcion2PasoUnico(numero, '');
+                const tipo = estadoUsuarios.get(numero)?.tipo;
+                if (tipo === 'opcion_2') {
+                    await this.enviarMensajeTexto(numero, '🔁 Vamos a actualizar tu lista de compras...');
+                    estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_2' });
+                    await this.opcion2PasoAPaso(numero, '');
+                } else if (tipo === 'opcion_3') {
+                    await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información del pago...');
+                    estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_3' });
+                    await this.opcion3PasoAPaso(numero, '');
+                } else {
+                    await this.enviarMensajeTexto(numero, '❓ No se pudo identificar el tipo de flujo para editar.');
+                }
                 return;
             }
         }
+
 
 
 
@@ -120,13 +440,13 @@ export class ChatbotService {
 
             switch (opcionSeleccionada) {
                 case 'opcion_1':
-                    await this.opcion1PasoUnico(numero, '');
+                    await this.opcion1PasoAPaso(numero, '');
                     return;
                 case 'opcion_2':
-                    await this.opcion2PasoUnico(numero, '');
+                    await this.opcion2PasoAPaso(numero, '');
                     return;
                 case 'opcion_3':
-                    await this.opcion3PasoUnico(numero, '');
+                    await this.opcion3PasoAPaso(numero, '');
                     return;
                 case 'opcion_4':
                     await this.enviarMensajeTexto(
@@ -154,13 +474,13 @@ export class ChatbotService {
         if (estadoUsuarios.has(numero) && tipo === 'text') {
             switch (estado.tipo) {
                 case 'opcion_1':
-                    await this.opcion1PasoUnico(numero, texto);
+                    await this.opcion1PasoAPaso(numero, texto);
                     break;
                 case 'opcion_2':
-                    await this.opcion2PasoUnico(numero, texto);
+                    await this.opcion2PasoAPaso(numero, texto);
                     break;
                 case 'opcion_3':
-                    await this.opcion3PasoUnico(numero, texto);
+                    await this.opcion3PasoAPaso(numero, texto);
                     break;
                 default:
                     this.logger.warn(`⚠️ Tipo de flujo desconocido para ${numero}`);
@@ -274,48 +594,54 @@ export class ChatbotService {
     }
 
 
-    async opcion1PasoUnico(numero: string, mensaje: string): Promise<void> {
-        const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {} };
+
+    async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
+        const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_1' };
 
         switch (estado.paso) {
             case 0:
-                await this.enviarMensajeTexto(
-                    numero,
-                    `📝 Claro, con mucho gusto.\nEnvíame la información en un solo mensaje con el siguiente formato:\n\n` +
-                    `Dirección de Recoger: ______\nTeléfono: ______\n\n` +
-                    `Dirección de entregar: ______\nTeléfono: ______`
-                );
+                await this.enviarMensajeTexto(numero, '📝 Por favor, indícame la *Dirección de recogida*.');
                 estado.paso = 1;
                 break;
 
             case 1:
                 if (!mensaje?.trim()) return;
+                estado.datos.direccionRecoger = mensaje;
+                await this.enviarMensajeTexto(numero, '📞 Ahora dime el *Teléfono de recogida*.');
+                estado.paso = 2;
+                break;
 
-                const mensajeNormalizado = mensaje.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+            case 2:
+                if (!mensaje?.trim()) return;
+                estado.datos.telefonoRecoger = mensaje;
+                await this.enviarMensajeTexto(numero, '📍 Indica la *Dirección de entrega*.');
+                estado.paso = 3;
+                break;
 
-                const recogerMatch = mensajeNormalizado.match(/direccion\s*de\s*recoger\s*:\s*(.+)\n\s*telefono\s*:\s*(.+)/i);
-                const entregarMatch = mensajeNormalizado.match(/direccion\s*de\s*entregar\s*:\s*(.+)\n\s*telefono\s*:\s*(.+)/i);
+            case 3:
+                if (!mensaje?.trim()) return;
+                estado.datos.direccionEntregar = mensaje;
+                await this.enviarMensajeTexto(numero, '📞 Por último, el *Teléfono de entrega*.');
+                estado.paso = 4;
+                break;
 
+            case 4:
+                if (!mensaje?.trim()) return;
 
-                if (!recogerMatch || !entregarMatch) {
-                    await this.enviarMensajeTexto(numero, '❌ El formato no es válido. Asegúrate de usar el formato exacto.');
-                    return;
-                }
+                // ✅ Evitar repetición del resumen y botones
+                if (estado.confirmacionEnviada) break;
 
-                estado.datos = {
-                    direccionRecoger: recogerMatch[1].trim(),
-                    telefonoRecoger: recogerMatch[2].trim(),
-                    direccionEntregar: entregarMatch[1].trim(),
-                    telefonoEntregar: entregarMatch[2].trim(),
-                };
+                estado.datos.telefonoEntregar = mensaje;
 
                 const { direccionRecoger, telefonoRecoger, direccionEntregar, telefonoEntregar } = estado.datos;
 
                 await this.enviarMensajeTexto(
                     numero,
-                    `✅ Esta es la información que me diste:\n\n` +
-                    `📍 Dirección de recogida: ${direccionRecoger}\n📞 Teléfono: ${telefonoRecoger}\n\n` +
-                    `📍 Dirección de entrega: ${direccionEntregar}\n📞 Teléfono: ${telefonoEntregar}`
+                    `✅ Esta es la información que me diste:
+📝 Dirección de recogida: ${direccionRecoger}
+📞 Teléfono: ${telefonoRecoger}
+📍 Dirección de entrega: ${direccionEntregar}
+📞 Teléfono: ${telefonoEntregar}`
                 );
 
                 await axiosWhatsapp.post('/messages', {
@@ -331,28 +657,35 @@ export class ChatbotService {
                             buttons: [
                                 {
                                     type: 'reply',
-                                    reply: { id: 'confirmar_info', title: '✅ Sí' },
+                                    reply: {
+                                        id: 'confirmar_info',
+                                        title: '✅ Sí',
+                                    },
                                 },
                                 {
                                     type: 'reply',
-                                    reply: { id: 'editar_info', title: '🔁 No, editar' },
+                                    reply: {
+                                        id: 'editar_info',
+                                        title: '🔁 No, editar',
+                                    },
                                 },
                             ],
                         },
                     },
                 });
 
-                estado.paso = 2;
+                estado.confirmacionEnviada = true;
+                estado.paso = 5;
                 break;
 
-            case 2:
-                // Esperas el botón: confirmar_info o editar_info
+            case 5:
+                // A la espera del botón
                 break;
 
             default:
                 await this.enviarMensajeTexto(numero, '❓ No entendí. Vamos a comenzar de nuevo.');
                 estadoUsuarios.delete(numero);
-                await this.opcion1PasoUnico(numero, '');
+                await this.opcion1PasoAPaso(numero, '');
                 return;
         }
 
@@ -360,27 +693,124 @@ export class ChatbotService {
     }
 
 
-    async opcion2PasoUnico(numero: string, mensaje: string): Promise<void> {
+    async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
         const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_2' };
 
         switch (estado.paso) {
             case 0:
                 await this.enviarMensajeTexto(
                     numero,
-                    `🛍️ Claro, con gusto.\nPor favor, escribe tu *lista de compras*.\n\nEjemplo:\n- Pan\n- Leche\n- Jugo`
+                    '🛍️ Por favor, envíame tu *lista de compras*.\n\nEjemplo:\n- Pan\n- Arroz\n- Jugo de naranja'
                 );
                 estado.paso = 1;
                 break;
 
             case 1:
                 if (!mensaje?.trim()) return;
-
                 estado.datos.listaCompras = mensaje.trim();
+                await this.enviarMensajeTexto(numero, '📍 Ahora indícame la *dirección de entrega*.');
+                estado.paso = 2;
+                break;
+
+            case 2:
+                if (!mensaje?.trim() || mensaje.length < 5) {
+                    await this.enviarMensajeTexto(numero, '⚠️ La dirección parece muy corta. Por favor, envíala nuevamente.');
+                    return;
+                }
+                estado.datos.direccionEntrega = mensaje.trim();
+                await this.enviarMensajeTexto(numero, '📞 Por último, dime el *teléfono de quien recibirá la compra*.');
+                estado.paso = 3;
+                break;
+
+            case 3:
+                if (!mensaje?.trim() || !/^\d{7,}$/.test(mensaje)) {
+                    await this.enviarMensajeTexto(numero, '⚠️ El teléfono debe tener al menos 7 dígitos. Escríbelo nuevamente.');
+                    return;
+                }
+
+                if (estado.confirmacionEnviada) break; // 🚫 Evitar repetición
+
+                estado.datos.telefonoEntrega = mensaje.trim();
+
+                const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
 
                 await this.enviarMensajeTexto(
                     numero,
-                    `📍 Ahora indícame en un solo mensaje:\n\n` +
-                    `Dirección de entrega: ______\nTeléfono quien recibe: ______`
+                    `🧾 Esta es la compra que solicitaste:\n\n📦 *Lista de compras:*\n${listaCompras}\n\n📍 *Dirección de entrega:*\n${direccionEntrega}\n📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
+                );
+
+                await axiosWhatsapp.post('/messages', {
+                    messaging_product: 'whatsapp',
+                    to: numero,
+                    type: 'interactive',
+                    interactive: {
+                        type: 'button',
+                        body: {
+                            text: '¿La información es correcta?',
+                        },
+                        action: {
+                            buttons: [
+                                {
+                                    type: 'reply',
+                                    reply: {
+                                        id: 'confirmar_compra',
+                                        title: '✅ Sí',
+                                    },
+                                },
+                                {
+                                    type: 'reply',
+                                    reply: {
+                                        id: 'editar_compra',
+                                        title: '🔁 No, editar',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                });
+
+                estado.confirmacionEnviada = true; // ✅ Marca como enviado
+                estado.paso = 4;
+                break;
+
+            case 4:
+                // Esperamos respuesta del botón
+                break;
+
+            default:
+                await this.enviarMensajeTexto(numero, '❗ Algo salió mal. Reiniciamos el proceso.');
+                estadoUsuarios.delete(numero);
+                await this.opcion2PasoAPaso(numero, '');
+                return;
+        }
+
+        estadoUsuarios.set(numero, estado); // Guardar cambios
+    }
+
+
+
+
+
+
+    async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
+        const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
+
+        switch (estado.paso) {
+            case 0:
+                await this.enviarMensajeTexto(
+                    numero,
+                    '💰 Para realizar un pago, primero debemos recoger el dinero.\n\n📍 Por favor, indícame la *dirección de recogida*.'
+                );
+                estado.paso = 1;
+                break;
+
+            case 1:
+                if (!mensaje?.trim()) return;
+                estado.datos.direccionRecoger = mensaje;
+
+                await this.enviarMensajeTexto(
+                    numero,
+                    '📞 Ahora dime el *teléfono del lugar de recogida*.'
                 );
                 estado.paso = 2;
                 break;
@@ -388,207 +818,57 @@ export class ChatbotService {
             case 2:
                 if (!mensaje?.trim()) return;
 
-                const mensajeNormalizado = normalizarTexto(mensaje);
+                // Si ya se envió el resumen y los botones, no repetir
+                if (estado.confirmacionEnviada) break;
 
-                // Expresiones sin tildes
-                const direccionRegex = /direccion(?:\s+de\s+entrega)?\s*:\s*(.+)/i;
-                const telefonoRegex = /(?:telefono|celular|tel)(?:\s+quien\s+recibe)?\s*:\s*(.+)/i;
-
-                const direccionMatch = mensajeNormalizado.match(direccionRegex);
-                const telefonoMatch = mensajeNormalizado.match(telefonoRegex);
-
-                if (!direccionMatch || !telefonoMatch) {
-                    await this.enviarMensajeTexto(
-                        numero,
-                        `❌ El formato no es válido.\nPor favor, incluye algo como:\n\nDirección de entrega: Calle 1 #2-34\nTeléfono: 3001234567`
-                    );
-                    return;
-                }
-
-                // Limpieza
-
-
-                estado.datos.direccionEntrega = limpiarCampo(direccionMatch[1]);
-                estado.datos.telefonoEntrega = limpiarCampo(telefonoMatch[1]); // ✅ Funciona
-
-                const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
-
-
-                const resumen =
-                    `🧾 Esta es la compra que solicitaste:\n\n` +
-                    `📦 *Lista de compras:*\n${listaCompras}\n\n` +
-                    `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
-                    `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`;
-
-                console.log(numero, resumen)
-
-                await this.enviarMensajeTexto(numero, resumen);
-
-                try {
-                    await axiosWhatsapp.post('/messages', {
-                        messaging_product: 'whatsapp',
-                        to: numero,
-                        type: 'interactive',
-                        interactive: {
-                            type: 'button',
-                            body: {
-                                text: '¿La información es correcta?',
-                            },
-                            action: {
-                                buttons: [
-                                    {
-                                        type: 'reply',
-                                        reply: {
-                                            id: 'confirmar_compra',
-                                            title: '✅ Sí, es correcto',
-                                        },
-                                    },
-                                    {
-                                        type: 'reply',
-                                        reply: {
-                                            id: 'editar_compra',
-                                            title: '🔁 Editar info', // ✅ Menos de 20 caracteres
-
-                                        },
-                                    },
-                                ],
-                            },
-                        },
-                    });
-
-                    estado.paso = 3;
-                } catch (error) {
-                    this.logger.error('❌ Error al enviar botones en opción 2:', error.response?.data || error.message);
-                    await this.enviarMensajeTexto(numero, '❌ No pudimos mostrar las opciones. Escribe *hola* para reiniciar.');
-                    estadoUsuarios.delete(numero);
-                    return;
-                }
-
-                break;
-
-            case 3:
-                // Esperando botón
-                break;
-
-            default:
-                await this.enviarMensajeTexto(numero, '❌ Algo salió mal. Empecemos de nuevo.');
-                estadoUsuarios.delete(numero);
-                await this.opcion2PasoUnico(numero, '');
-                return;
-        }
-
-        estadoUsuarios.set(numero, estado);
-    }
-
-
-
-
-
-    async opcion3PasoUnico(numero: string, mensaje: string): Promise<void> {
-        const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
-
-        switch (estado.paso) {
-            case 0:
-                await this.enviarMensajeTexto(
-                    numero,
-                    '💰 Claro, para realizar un pago primero debemos recoger el dinero.\n\n' +
-                    'Envíame la dirección y el teléfono en el siguiente formato:\n\n' +
-                    'Dirección de Recoger: ______\nTeléfono: ______'
-                );
-                estado.paso = 1;
-                break;
-
-            case 1:
-                if (!mensaje?.trim()) return;
-
-                // 🔤 Normalizar mensaje y limpiar
-                const mensajeNormalizado = mensaje
-                    .normalize("NFD")
-                    .replace(/[\u0300-\u036f]/g, "") // eliminar tildes
-                    .replace(/_{2,}/g, '')            // eliminar ___
-                    .toLowerCase();
-
-                const direccionRegex = /direccion\s*de\s*recoger\s*:\s*(.+)\n/i;
-                const telefonoRegex = /telefono\s*:\s*(.+)/i;
-
-                const direccionMatch = mensajeNormalizado.match(direccionRegex);
-                const telefonoMatch = mensajeNormalizado.match(telefonoRegex);
-
-                if (!direccionMatch || !telefonoMatch) {
-                    await this.enviarMensajeTexto(
-                        numero,
-                        '❌ El formato no es válido. Asegúrate de escribir:\n\n' +
-                        'Dirección de Recoger: Calle 123\nTeléfono: 3001234567'
-                    );
-                    return;
-                }
-
-                // 🧹 Limpieza extra por si queda ruido
-                const limpiarCampo = (texto: string) =>
-                    texto.replace(/_{2,}/g, '').replace(/\s+/g, ' ').trim();
-
-                estado.datos.direccionRecoger = limpiarCampo(direccionMatch[1]);
-                estado.datos.telefonoRecoger = limpiarCampo(telefonoMatch[1]);
+                estado.datos.telefonoRecoger = mensaje;
 
                 const { direccionRecoger, telefonoRecoger } = estado.datos;
 
-                const resumen =
-                    `✅ Esta es la información que me diste:\n\n` +
-                    `📍 Dirección de recogida: ${direccionRecoger}\n` +
-                    `📞 Teléfono: ${telefonoRecoger}`;
+                await this.enviarMensajeTexto(
+                    numero,
+                    `✅ Esta es la información que me diste:\n\n📍 Dirección de recogida: ${direccionRecoger}\n📞 Teléfono: ${telefonoRecoger}`
+                );
 
-                await this.enviarMensajeTexto(numero, resumen);
-
-                // 📲 Enviar botones
-                try {
-                    await axiosWhatsapp.post('/messages', {
-                        messaging_product: 'whatsapp',
-                        to: numero,
-                        type: 'interactive',
-                        interactive: {
-                            type: 'button',
-                            body: {
-                                text: '¿La información es correcta?',
-                            },
-                            action: {
-                                buttons: [
-                                    {
-                                        type: 'reply',
-                                        reply: {
-                                            id: 'confirmar_pago',
-                                            title: '✅ Sí',
-                                        },
-                                    },
-                                    {
-                                        type: 'reply',
-                                        reply: {
-                                            id: 'editar_info',
-                                            title: '🔁 Modificar',
-                                        },
-                                    },
-                                ],
-                            },
+                await axiosWhatsapp.post('/messages', {
+                    messaging_product: 'whatsapp',
+                    to: numero,
+                    type: 'interactive',
+                    interactive: {
+                        type: 'button',
+                        body: {
+                            text: '¿La información es correcta?',
                         },
-                    });
+                        action: {
+                            buttons: [
+                                {
+                                    type: 'reply',
+                                    reply: {
+                                        id: 'confirmar_compra',
+                                        title: '✅ Sí',
+                                    },
+                                },
+                                {
+                                    type: 'reply',
+                                    reply: {
+                                        id: 'editar_compra',
+                                        title: '🔁 No, editar',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                });
 
-                    estado.paso = 2;
-                } catch (error) {
-                    this.logger.error('❌ Error al enviar botones en opción 3:', error.response?.data || error.message);
-                    await this.enviarMensajeTexto(numero, '❌ No se pudieron mostrar las opciones. Escribe *hola* para reiniciar.');
-                    estadoUsuarios.delete(numero);
-                    return;
-                }
-
+                estado.confirmacionEnviada = true; // ✅ Marca como enviado
+                estado.paso = 3;
                 break;
 
-            case 2:
-                // Esperando confirmación o edición
-                break;
 
             default:
                 await this.enviarMensajeTexto(numero, '❌ Algo salió mal. Empecemos de nuevo.');
                 estadoUsuarios.delete(numero);
-                await this.opcion3PasoUnico(numero, '');
+                await this.opcion3PasoAPaso(numero, '');
                 return;
         }
 
@@ -596,18 +876,48 @@ export class ChatbotService {
     }
 
 
+    private async enviarSticker(numero: string, mediaId: string): Promise<void> {
+        try {
+            await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: numero,
+                type: 'sticker',
+                sticker: {
+                    id: mediaId,
+                },
+            });
+
+            this.logger.log(`✅ Sticker enviado a ${numero}`);
+        } catch (error) {
+            this.logger.error('❌ Error al enviar el sticker:', error.response?.data || error.message);
+        }
+    }
+
+
+
+    private generarResumenPedido(datos: any, tipo: string, nombre: string, numero: string): string {
+        if (!datos) return 'Sin datos del pedido.';
+
+        const recoger = datos.direccionRecoger
+            ? `📍 *Recoger en:* ${datos.direccionRecoger}\n📞 *Tel:* ${datos.telefonoRecoger}`
+            : '';
+
+        const entregar = datos.direccionEntregar || datos.direccionEntrega;
+        const telEntregar = datos.telefonoEntregar;
+        const entrega = entregar
+            ? `🏠 *Entregar en:* ${entregar}\n📞 *Tel:* ${telEntregar}`
+            : '';
+
+        const lista = datos.listaCompras
+            ? `🛒 *Lista de compras:*\n${datos.listaCompras}`
+            : '';
+
+        let resumen = [recoger, entrega, lista].filter(Boolean).join('\n\n');
+        resumen += `\n\n🔁 Tipo de servicio: *${tipo.replace('opcion_', '')}*`;
+
+        return resumen.trim();
+    }
+
 
 
 }
-
-
-function normalizarTexto(texto: string): string {
-    return texto
-        .normalize("NFD") // descompone tildes
-        .replace(/[\u0300-\u036f]/g, "") // elimina tildes
-        .toLowerCase(); // minúsculas
-}
-
-// Limpieza: elimina caracteres como ___ y espacios innecesarios
-const limpiarCampo = (texto: string) =>
-    texto.replace(/_{2,}/g, '').replace(/\s+/g, ' ').trim();
