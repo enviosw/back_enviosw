@@ -69,4 +69,7 @@ export class DomiciliosService {
     return await query.getMany();
   }
 
+
+  
+
 }

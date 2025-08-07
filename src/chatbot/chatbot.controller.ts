@@ -1,7 +1,9 @@
-import { Controller, Get, Post, Body, Query, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Logger, Param } from '@nestjs/common';
 import { ChatbotService } from './chatbot.service';
 import { ConfigService } from '@nestjs/config';
 import { whatsappConstants } from 'src/auth/constants/jwt.constant';
+import { ChatService } from './chat.service';
+import { Mensaje } from './entities/mensajes.entity';
 
 
 @Controller('chatbot')
@@ -10,6 +12,8 @@ export class ChatbotController {
   private readonly logger = new Logger(ChatbotController.name);
 
   constructor(private readonly chatbotService: ChatbotService,
+        private readonly chatService: ChatService, // ✅ Inyectamos ChatService
+
 
   ) { }
 
@@ -48,5 +52,27 @@ export class ChatbotController {
     this.logger.debug('webhook resibido');
     await this.chatbotService.procesarMensajeEntrante(body);
     return { status: 'Mensaje recibido' };
+  }
+
+    // ✅ Lista todos los mensajes entre un domiciliario y un cliente
+  @Get('mensajes')
+  async obtenerMensajes(
+    @Query('cliente') cliente: string,
+    @Query('domiciliario') domiciliario: string,
+  ) {
+    return this.chatService.listarMensajesPorDomiciliarioYCliente(domiciliario, cliente);
+  }
+
+  @Get('mensajes/:idConversacion')
+async obtenerMensajesPorConversacionId(
+  @Param('idConversacion') idConversacion: string,
+): Promise<Mensaje[]> {
+  return this.chatService.listarMensajesPorConversacionId(idConversacion);
+}
+
+  // ✅ Lista todos los chats de un domiciliario (últimos mensajes)
+  @Get('chats/:numeroDomiciliario')
+  async obtenerChats(@Param('numeroDomiciliario') numeroDomiciliario: string) {
+    return this.chatService.obtenerChatsPorDomiciliario(numeroDomiciliario);
   }
 }

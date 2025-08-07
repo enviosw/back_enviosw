@@ -1,9 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { ComerciosService } from 'src/comercios/comercios.service';
 import { axiosWhatsapp } from 'src/common/axios-whatsapp.instance';
 import { DomiciliosService } from 'src/domicilios/domicilios.service';
 import { DomiciliariosService } from 'src/domiliarios/domiliarios.service';
 import { Domiciliario } from 'src/domiliarios/entities/domiliario.entity';
+import { Conversacion } from './entities/conversacion.entity';
+import { Repository } from 'typeorm';
+import { Mensaje } from './entities/mensajes.entity';
 
 
 const estadoUsuarios = new Map<string, any>();
@@ -31,6 +35,12 @@ export class ChatbotService {
         private readonly domiciliosService: DomiciliosService, // 👈 Aquí está la inyección
 
 
+        @InjectRepository(Conversacion)
+        private readonly conversacionRepo: Repository<Conversacion>,
+
+        @InjectRepository(Mensaje)
+        private readonly mensajeRepo: Repository<Mensaje>,
+
     ) { }
 
 
@@ -53,11 +63,12 @@ export class ChatbotService {
         const texto = mensaje?.text?.body;
         const nombre = value?.contacts?.[0]?.profile?.name ?? 'cliente';
 
-
+        
         const esDomiciliario = await this.domiciliarioService.esDomiciliario(numero);
-
         // Solo mostrar botones si NO es respuesta interactiva (para evitar bucle)
-        if (esDomiciliario && tipo !== 'interactive') {
+const enConversacionActiva = estadoUsuarios.has(numero) && estadoUsuarios.get(numero)?.conversacionId;
+
+if (esDomiciliario && !enConversacionActiva && tipo !== 'interactive') {
             await this.enviarMensajeTexto(numero, '👋 Hola, ¿qué estado deseas establecer?');
 
             await axiosWhatsapp.post('/messages', {
@@ -94,8 +105,6 @@ export class ChatbotService {
         }
 
 
-
-
         // 🧠 Obtener o inicializar estado del usuario
         let estado = estadoUsuarios.get(numero);
 
@@ -103,6 +112,52 @@ export class ChatbotService {
             estado = { paso: 0, datos: {}, inicioMostrado: false };
             estadoUsuarios.set(numero, estado);
         }
+
+   if (estado?.conversacionId) {
+  const conversacion = await this.conversacionRepo.findOne({
+    where: { id: estado.conversacionId },
+  });
+
+  if (!conversacion) {
+    return;
+  }
+
+  const esCliente = numero === conversacion.numero_cliente;
+  const esDomiciliario = numero === conversacion.numero_domiciliario;
+  const receptor = esCliente ? conversacion.numero_domiciliario : conversacion.numero_cliente;
+
+  // Guardar mensaje en la base de datos
+  await this.mensajeRepo.save({
+    conversacion_id: String(conversacion.id),
+    emisor: numero,
+    receptor,
+    contenido: texto,
+    tipo,
+  });
+
+  // 🔚 Si escriben "fin", finalizar conversación
+  if (texto?.trim().toLowerCase() === 'fin') {
+    await this.enviarMensajeTexto(numero, '✅ Has finalizado la conversación.');
+    await this.enviarMensajeTexto(receptor, '⚠️ La otra persona finalizó la conversación.');
+
+    conversacion.estado = 'finalizada';
+    conversacion.fecha_fin = new Date();
+    await this.conversacionRepo.save(conversacion);
+
+    estadoUsuarios.delete(numero);
+    estadoUsuarios.delete(receptor);
+    temporizadoresInactividad.delete(numero);
+    temporizadoresInactividad.delete(receptor);
+
+    return;
+  }
+
+  // Reenviar el mensaje al otro participante
+  await this.enviarMensajeTexto(receptor, `💬 ${texto}`);
+  return;
+}
+
+
 
         estado.ultimoMensaje = Date.now(); // ⏱️ Guarda la hora
 
@@ -114,6 +169,7 @@ export class ChatbotService {
         // Crea nuevo temporizador
         const timeout = setTimeout(() => {
             reiniciarPorInactividad(numero, this.enviarMensajeTexto.bind(this));
+            
         }, 5 * 60 * 1000); // ⏳ 5 minutos
 
         temporizadoresInactividad.set(numero, timeout);
@@ -123,6 +179,12 @@ export class ChatbotService {
         if (texto?.trim().toLowerCase() === 'hola') {
             estadoUsuarios.delete(numero); // Limpiar estado anterior
 
+            if (estado?.conversacionId) {
+  await this.conversacionRepo.update(estado.conversacionId, {
+    fecha_fin: new Date(),
+    estado: 'finalizada',
+  });
+}
             await this.enviarMensajeTexto(
                 numero,
                 `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
@@ -163,142 +225,6 @@ export class ChatbotService {
             return;
         }
 
-
-
-        //         if (mensaje?.interactive?.type === 'button_reply') {
-        //             const id = mensaje.interactive.button_reply.id;
-
-
-        //             if (id === 'disponible' || id === 'no_disponible') {
-        //                 const disponible = id === 'disponible';
-
-        //                 try {
-        //                     await this.domiciliarioService.cambiarDisponibilidadPorTelefono(numero, disponible);
-
-        //                     await this.enviarMensajeTexto(
-        //                         numero,
-        //                         `✅ Estado actualizado. Ahora estás como *${disponible ? 'DISPONIBLE' : 'NO DISPONIBLE'}*.`
-        //                     );
-        //                 } catch (error) {
-        //                     this.logger.warn(`⚠️ Error al cambiar disponibilidad: ${error.message}`);
-        //                     await this.enviarMensajeTexto(numero, '❌ No se encontró tu perfil como domiciliario.');
-        //                 }
-
-        //                 // 🧹 Finaliza conversación y limpia estado
-        //                 estadoUsuarios.delete(numero);
-
-        //                 if (temporizadoresInactividad.has(numero)) {
-        //                     clearTimeout(temporizadoresInactividad.get(numero));
-        //                     temporizadoresInactividad.delete(numero);
-        //                 }
-
-        //                 await this.enviarMensajeTexto(
-        //                     numero,
-        //                     '👋 Gracias por actualizar tu estado. Puedes escribir *hola* si necesitas algo más.'
-        //                 );
-
-        //                 return;
-        //             }
-
-
-
-        //             // Confirmaciones
-        //             if (id === 'confirmar_info' || id === 'confirmar_pago' || id === 'confirmar_compra') {
-        //                 try {
-        //                     const domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
-
-        //                     const estado = estadoUsuarios.get(numero);
-        //                     const datos = estado?.datos || {};
-        //                     const tipo = estado?.tipo || 'servicio';
-
-        //                     const resumenCliente = `✅ Ya enviamos un domiciliario para ti:
-
-        // 👤 *${domiciliario.nombre} ${domiciliario.apellido}*
-        // 🧥 Chaqueta: *${domiciliario.numero_chaqueta}*
-        // 📞 WhatsApp: *${domiciliario.telefono_whatsapp}*
-
-        // 🚀 Está en camino. Gracias por usar *Domicilios W* 🛵💨`;
-
-        //                     await this.enviarMensajeTexto(numero, resumenCliente);
-
-        //                     const resumenPedido = this.generarResumenPedido(datos, tipo, nombre, numero);
-
-        //                     // 📤 Validar número del domiciliario
-        //                     const telefonoDomiciliario = domiciliario.telefono_whatsapp;
-
-        //                     const mensajeDomiciliario = `📦 *Nuevo pedido asignado*
-
-        // ${resumenPedido}
-
-        // 👤 Cliente: *${nombre}*
-        // 📞 WhatsApp: ${numero.startsWith('+') ? numero : '+57' + numero.slice(-10)}`;
-
-        //                     this.logger.log(`📤 Enviando pedido al domiciliario ${telefonoDomiciliario}`);
-
-        //                     await this.enviarMensajeTexto(telefonoDomiciliario, mensajeDomiciliario);
-
-        //                     this.logger.log(`✅ Mensaje enviado al domiciliario ${telefonoDomiciliario}`);
-
-        //                     await this.enviarMensajeTexto(numero, '✅ El chat ha finalizado. Puedes escribir *hola* para comenzar de nuevo.');
-
-        //                     await this.domiciliosService.create({
-        //                     mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
-        //                     estado: 1, // aprobado
-        //                     numero_cliente: numero,
-        //                     fecha: new Date().toISOString(),
-        //                     hora: new Date().toTimeString().slice(0, 5), // Ej: "14:32"
-        //                     id_cliente: null,
-        //                     id_domiciliario: domiciliario.id,
-        //                     tipo_servicio: tipo.replace('opcion_', ''),
-
-        //                     origen_direccion: datos.direccionRecoger ?? '',
-        //                     destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
-        //                     telefono_contacto_origen: datos.telefonoRecoger ?? '',
-        //                     telefono_contacto_destino: datos.telefonoEntregar ?? datos.telefonoEntrega ?? '',
-
-        //                     notas: '',
-        //                     detalles_pedido: datos.listaCompras ?? '',
-        //                     foto_entrega_url: '',
-        //                     });
-
-
-        //                     estadoUsuarios.delete(numero);
-
-        //                 } catch (error) {
-        //                     this.logger.error('❌ Error al asignar domiciliario o enviar mensajes:', error.response?.data || error.message);
-        //                     await this.enviarMensajeTexto(numero, '❌ Ocurrió un error al asignar el domiciliario. Por favor intenta de nuevo.');
-        //                 }
-
-        //                 return;
-        //             }
-
-
-
-        //             // Ediciones
-        //             if (id === 'editar_info') {
-        //                 await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información. Empecemos de nuevo...');
-        //                 estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_1' });
-        //                 await this.opcion1PasoAPaso(numero, '');
-        //                 return;
-        //             }
-
-
-        //             if (id === 'editar_compra') {
-        //                 const tipo = estadoUsuarios.get(numero)?.tipo;
-        //                 if (tipo === 'opcion_2') {
-        //                     await this.enviarMensajeTexto(numero, '🔁 Vamos a actualizar tu lista de compras...');
-        //                     estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_2' });
-        //                     await this.opcion2PasoAPaso(numero, '');
-        //                 } else if (tipo === 'opcion_3') {
-        //                     await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información del pago...');
-        //                     estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_3' });
-        //                     await this.opcion3PasoAPaso(numero, '');
-        //                 } else {
-        //                     await this.enviarMensajeTexto(numero, '❓ No se pudo identificar el tipo de flujo para editar.');
-        //                 }
-        //                 return;
-        //             }
-        //         }
 
         if (mensaje?.interactive?.type === 'button_reply') {
             const id = mensaje.interactive.button_reply.id;
@@ -345,9 +271,28 @@ export class ChatbotService {
                 const datos = estado?.datos || {};
                 const tipo = estado?.tipo || 'servicio';
 
+
+                
                 try {
                     domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
 
+                    
+                    const conversacion = this.conversacionRepo.create({
+                    numero_cliente: numero, // el número del cliente
+                    numero_domiciliario: domiciliario.telefono_whatsapp,
+                    fecha_inicio: new Date(),
+                    estado: 'activa',
+                    });
+                    await this.conversacionRepo.save(conversacion);
+                    estado.conversacionId = conversacion.id;
+
+
+                    // 🔧 Aquí conectamos al domiciliario con el cliente
+estadoUsuarios.set(`${domiciliario.telefono_whatsapp}`, {
+  conversacionId: conversacion.id,
+  tipo: 'conversacion_activa',
+  inicioMostrado: true,
+});
                     resumenCliente = `✅ Ya enviamos un domiciliario para ti:
 
 👤 *${domiciliario.nombre} ${domiciliario.apellido}*
@@ -360,13 +305,14 @@ export class ChatbotService {
 
                     const resumenPedido = this.generarResumenPedido(datos, tipo, nombre, numero);
 
-                    const telefonoDomiciliario = domiciliario.telefono_whatsapp;
+const telefonoDomiciliario = domiciliario.telefono_whatsapp.replace(/\D/g, ''); // quita signos y espacios
                     const mensajeDomiciliario = `📦 *Nuevo pedido asignado*
 
 ${resumenPedido}
 
 👤 Cliente: *${nombre}*
 📞 WhatsApp: ${numero.startsWith('+') ? numero : '+57' + numero.slice(-10)}`;
+
 
                     this.logger.log(`📤 Enviando pedido al domiciliario ${telefonoDomiciliario}`);
                     await this.enviarMensajeTexto(telefonoDomiciliario, mensajeDomiciliario);
@@ -396,13 +342,16 @@ Gracias por usar *Domicilios W* 🛵💨`;
                     detalles_pedido: datos.listaCompras ?? '',
                     foto_entrega_url: '',
                 });
+await this.enviarMensajeTexto(
+  numero,
+  '✅ Ya estás conectado con el domiciliario. Puedes chatear aquí. Escribe *fin* para terminar la conversación.'
+);
 
-                await this.enviarMensajeTexto(numero, '✅ El chat ha finalizado. Puedes escribir *hola* para comenzar de nuevo.');
-                estadoUsuarios.delete(numero);
 
                 return;
             }
 
+            
             // ✏️ Editar información
             if (id === 'editar_info') {
                 await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información. Empecemos de nuevo...');

@@ -51,6 +51,10 @@ export class DomiciliariosController {
     return await this.domiciliariosService.getAll();
   }
 
+  @Get('resumen')
+  getResumen() {
+    return this.domiciliariosService.listarResumen();
+  }
 
   // ✏️ Actualizar domiciliario existente
   @Put(':id')

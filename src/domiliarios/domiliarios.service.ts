@@ -125,7 +125,6 @@ export class DomiciliariosService {
   }
 
 
-  // ✅ Cambia el estado de disponibilidad por número de WhatsApp
   // ✅ Cambia el estado de disponibilidad por número de WhatsApp y actualiza turno
   async cambiarDisponibilidadPorTelefono(telefono: string, disponible: boolean): Promise<void> {
     const domiciliario = await this.domiciliarioRepo.findOneBy({ telefono_whatsapp: telefono });
@@ -146,6 +145,17 @@ export class DomiciliariosService {
     await this.domiciliarioRepo.save(domiciliario);
   }
 
+
+
+  async listarResumen(): Promise<{ id: number; nombre: string; telefono_whatsapp: string }[]> {
+  const domiciliarios = await this.domiciliarioRepo
+    .createQueryBuilder('d')
+    .select(['d.id AS id', 'd.nombre AS nombre', 'd.telefono_whatsapp AS telefono_whatsapp'])
+    .orderBy('d.turno_orden', 'ASC')
+    .getRawMany();
+
+  return domiciliarios;
+}
 
 
 }
