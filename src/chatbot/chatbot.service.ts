@@ -8,19 +8,23 @@ import { Domiciliario } from 'src/domiliarios/entities/domiliario.entity';
 import { Conversacion } from './entities/conversacion.entity';
 import { Repository } from 'typeorm';
 import { Mensaje } from './entities/mensajes.entity';
+import { Cron } from '@nestjs/schedule';
 
 
 const estadoUsuarios = new Map<string, any>();
 const temporizadoresInactividad = new Map<string, NodeJS.Timeout>(); // ⏰ Temporizadores
+const temporizadoresEstado = new Map<string, NodeJS.Timeout>(); // TTL para solicitar estado a domiciliario
+const bloqueoMenu = new Map<string, NodeJS.Timeout>(); // Bloqueo temporal del menú
+
 
 async function reiniciarPorInactividad(numero: string, enviarMensajeTexto: Function) {
-    estadoUsuarios.delete(numero);
-    temporizadoresInactividad.delete(numero);
+  estadoUsuarios.delete(numero);
+  temporizadoresInactividad.delete(numero);
 
-    await enviarMensajeTexto(
-        numero,
-        '⏳ Como no recibimos más mensajes, el chat fue finalizado automáticamente.\nEscribe *hola* si deseas empezar de nuevo.'
-    );
+  await enviarMensajeTexto(
+    numero,
+    '⏳ Como no recibimos más mensajes, el chat fue finalizado automáticamente.\nEscribe *hola* si deseas empezar de nuevo.'
+  );
 }
 
 @Injectable()
@@ -28,6 +32,7 @@ export class ChatbotService {
 
 
     private readonly logger = new Logger(ChatbotService.name);
+  private isRetryRunning = false; // 🔒 candado antisolape
 
     constructor(
         private readonly comerciosService: ComerciosService, // 👈 Aquí está la inyección
@@ -43,6 +48,132 @@ export class ChatbotService {
 
     ) { }
 
+      // 🧠 helper: armar resumen desde registro de pedido en BD (no desde "datos")
+  private generarResumenPedidoDesdePedido(pedido: any): string {
+    const recoger = pedido.origen_direccion
+      ? `📍 *Recoger en:* ${pedido.origen_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_origen || '-'}`
+      : '';
+    const entregar = pedido.destino_direccion
+      ? `🏠 *Entregar en:* ${pedido.destino_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_destino || '-'}`
+      : '';
+    const lista = pedido.detalles_pedido
+      ? `🛒 *Lista de compras:*\n${pedido.detalles_pedido}`
+      : '';
+    const tipoTxt = pedido.tipo_servicio ? `\n\n🔁 Tipo de servicio: *${pedido.tipo_servicio}*` : '';
+    return [recoger, entregar, lista].filter(Boolean).join('\n\n') + tipoTxt;
+  }
+
+  // 🕑 Corre cada 2 minutos
+  @Cron('*/2 * * * *')
+  async reintentarAsignacionPendientes(): Promise<void> {
+    if (this.isRetryRunning) {
+      this.logger.log('⏳ Reintento ya en ejecución; se omite esta corrida.');
+      return;
+    }
+    this.isRetryRunning = true;
+
+    try {
+      // 1) Trae pedidos PENDIENTES (ajusta take/orden según negocio)
+      const pendientes = await this.domiciliosService.find({
+        where: { estado: 0 },
+        order: { fecha: 'ASC' }, // primero los más antiguos
+        take: 25,
+      });
+
+      if (!pendientes?.length) {
+        this.logger.log('✅ No hay pedidos pendientes para reintentar.');
+        return;
+      }
+
+      this.logger.log(`🔁 Reintentando asignación para ${pendientes.length} pedido(s) pendiente(s).`);
+
+      for (const pedido of pendientes) {
+        try {
+          // 2) Intentar asignar domiciliario disponible
+          const domiciliario: Domiciliario | null =
+            await this.domiciliarioService.asignarDomiciliarioDisponible();
+
+          if (!domiciliario) {
+            this.logger.warn(`⚠️ Sin domiciliarios para pedido id=${pedido.id}. Se mantiene pendiente.`);
+            continue; // sigue con el siguiente
+          }
+
+          // 3) Actualizar pedido -> asignado
+          await this.domiciliosService.update(pedido.id, {
+            estado: 1,
+            id_domiciliario: domiciliario.id,
+          });
+
+          // 4) Crear conversación (si no existe ya)
+          const conversacion = this.conversacionRepo.create({
+            numero_cliente: pedido.numero_cliente,
+            numero_domiciliario: domiciliario.telefono_whatsapp,
+            fecha_inicio: new Date(),
+            estado: 'activa',
+          });
+          await this.conversacionRepo.save(conversacion);
+
+          // 5) Notificar a cliente
+          const resumen = this.generarResumenPedidoDesdePedido(pedido);
+          await this.enviarMensajeTexto(
+            pedido.numero_cliente,
+            `✅ ¡Buenas noticias! Ya asignamos un domiciliario a tu pedido.\n\n` +
+              `👤 *${domiciliario.nombre} ${domiciliario.apellido}*\n` +
+              `🧥 Chaqueta: *${domiciliario.numero_chaqueta}*\n` +
+              `📞 WhatsApp: *${domiciliario.telefono_whatsapp}*\n\n` +
+              `🔎 Resumen:\n${resumen}\n\n` +
+              `💬 Ya puedes chatear aquí. Escribe *fin* para terminar la conversación.`
+          );
+
+          // 6) Notificar al domiciliario
+          const telefonoDomiciliario = domiciliario.telefono_whatsapp.replace(/\D/g, '');
+          await this.enviarMensajeTexto(
+            telefonoDomiciliario,
+            `📦 *Nuevo pedido asignado*\n\n${resumen}\n\n` +
+              `👤 Cliente: *${pedido.numero_cliente || 'Cliente'}*\n` +
+              `📞 WhatsApp: ${pedido.numero_cliente.startsWith('+') ? pedido.numero_cliente : '+57' + String(pedido.numero_cliente).slice(-10)}`
+          );
+
+          // 7) Conectar en memoria para que fluya el chat
+          estadoUsuarios.set(pedido.numero_cliente, {
+            ...(estadoUsuarios.get(pedido.numero_cliente) || {}),
+            conversacionId: conversacion.id,
+            inicioMostrado: true,
+          });
+          estadoUsuarios.set(`${domiciliario.telefono_whatsapp}`, {
+            conversacionId: conversacion.id,
+            tipo: 'conversacion_activa',
+            inicioMostrado: true,
+          });
+
+          // 8) Limpia flag de espera si existía
+          const st = estadoUsuarios.get(pedido.numero_cliente) || {};
+          st.esperandoAsignacion = false;
+          estadoUsuarios.set(pedido.numero_cliente, st);
+
+          this.logger.log(`✅ Pedido id=${pedido.id} asignado a domi id=${domiciliario.id}.`);
+        } catch (err) {
+          this.logger.error(`❌ Error reintentando pedido id=${pedido.id}: ${err?.message || err}`);
+          // sigue con el siguiente
+        }
+      }
+    } catch (err) {
+      this.logger.error(`❌ Error global en reintentos: ${err?.message || err}`);
+    } finally {
+      this.isRetryRunning = false;
+    }
+  }
+
+  // ✅ Guardia único: ¿está en cualquier flujo o puente?
+  private estaEnCualquierFlujo(numero: string): boolean {
+    const st = estadoUsuarios.get(numero);
+    return Boolean(
+      st?.conversacionId ||   // puente cliente-domiciliario activo
+      st?.awaitingEstado ||   // domiciliario eligiendo estado via botones
+      st?.tipo ||             // opcion_1/2/3 o etiquetas como 'restaurantes'/'soporte'
+      st?.flujoActivo         // bandera genérica para flujos no guiados
+    );
+  }
 
     async procesarMensajeEntrante(body: any): Promise<void> {
         this.logger.debug('📦 Payload recibido del webhook:', JSON.stringify(body, null, 2));
@@ -66,43 +197,53 @@ export class ChatbotService {
         
         const esDomiciliario = await this.domiciliarioService.esDomiciliario(numero);
         // Solo mostrar botones si NO es respuesta interactiva (para evitar bucle)
-const enConversacionActiva = estadoUsuarios.has(numero) && estadoUsuarios.get(numero)?.conversacionId;
+const enConversacionActiva =
+  estadoUsuarios.has(numero) && estadoUsuarios.get(numero)?.conversacionId;
 
-if (esDomiciliario && !enConversacionActiva && tipo !== 'interactive') {
-            await this.enviarMensajeTexto(numero, '👋 Hola, ¿qué estado deseas establecer?');
+  if (esDomiciliario && !enConversacionActiva && tipo !== 'interactive') {
+      const st = estadoUsuarios.get(numero) || {};
+      if (st.awaitingEstado) {
+        this.logger.log(`⏭️ Ya se pidió estado a ${numero}; no se reenvía.`);
+        return;
+      }
 
-            await axiosWhatsapp.post('/messages', {
-                messaging_product: 'whatsapp',
-                to: numero,
-                type: 'interactive',
-                interactive: {
-                    type: 'button',
-                    body: {
-                        text: 'Selecciona tu estado actual:',
-                    },
-                    action: {
-                        buttons: [
-                            {
-                                type: 'reply',
-                                reply: {
-                                    id: 'disponible',
-                                    title: '✅ Disponible',
-                                },
-                            },
-                            {
-                                type: 'reply',
-                                reply: {
-                                    id: 'no_disponible',
-                                    title: '🛑 No disponible',
-                                },
-                            },
-                        ],
-                    },
-                },
-            });
+      st.awaitingEstado = true;
+      estadoUsuarios.set(numero, st);
 
-            return;
-        }
+      // TTL de seguridad (5 min)
+      if (temporizadoresEstado.has(numero)) {
+        clearTimeout(temporizadoresEstado.get(numero)!);
+      }
+      const t = setTimeout(() => {
+        const s = estadoUsuarios.get(numero) || {};
+        s.awaitingEstado = false;
+        estadoUsuarios.set(numero, s);
+        temporizadoresEstado.delete(numero);
+        this.logger.log(`⏳ TTL expiró; limpiada awaitingEstado de ${numero}`);
+      }, 5 * 60 * 1000);
+      temporizadoresEstado.set(numero, t);
+
+      await this.enviarMensajeTexto(numero, '👋 Hola, ¿qué estado deseas establecer?');
+
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: numero,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: 'Selecciona tu estado actual:' },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'disponible', title: '✅ Disponible' } },
+              { type: 'reply', reply: { id: 'no_disponible', title: '🛑 No disponible' } },
+            ],
+          },
+        },
+      });
+
+      return;
+    }
+
 
 
         // 🧠 Obtener o inicializar estado del usuario
@@ -157,6 +298,7 @@ if (esDomiciliario && !enConversacionActiva && tipo !== 'interactive') {
   return;
 }
 
+const textoLimpio = (texto || '').trim().toLowerCase();
 
 
         estado.ultimoMensaje = Date.now(); // ⏱️ Guarda la hora
@@ -170,33 +312,29 @@ if (esDomiciliario && !enConversacionActiva && tipo !== 'interactive') {
         const timeout = setTimeout(() => {
             reiniciarPorInactividad(numero, this.enviarMensajeTexto.bind(this));
             
-        }, 5 * 60 * 1000); // ⏳ 5 minutos
+        }, 10 * 60 * 1000); // ⏳ 5 minutos
 
         temporizadoresInactividad.set(numero, timeout);
 
 
-        // ✅ Reiniciar si el usuario escribe "hola"
-        if (texto?.trim().toLowerCase() === 'hola') {
-            estadoUsuarios.delete(numero); // Limpiar estado anterior
-
-            if (estado?.conversacionId) {
-  await this.conversacionRepo.update(estado.conversacionId, {
-    fecha_fin: new Date(),
-    estado: 'finalizada',
-  });
-}
-            await this.enviarMensajeTexto(
-                numero,
-                `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
+       // ✅ Reiniciar si el usuario escribe un saludo/comando
+const triggersReinicio = ['hola','menu','inicio','empezar','buenas','buenos dias','buenas tardes','buenas noches'];
+if (tipo === 'text' && triggersReinicio.some(t => textoLimpio.includes(t))) {
+  estadoUsuarios.delete(numero);
+  if (estado?.conversacionId) {
+    await this.conversacionRepo.update(estado.conversacionId, { fecha_fin: new Date(), estado: 'finalizada' });
+  }
+  await this.enviarMensajeTexto(
+    numero,
+    `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
 
 📲 Pide tu servicio ingresando a nuestra página web:
 🌐 https://domiciliosw.com/`
-            );
-            await this.enviarSticker(numero, '3908588892738247');
-
-            await this.enviarListaOpciones(numero);
-            return; // Evita que se siga ejecutando el flujo anterior
-        }
+  );
+  await this.enviarSticker(numero, '3908588892738247');
+  await this.enviarListaOpciones(numero);
+  return;
+}
 
         if (tipo === 'sticker') {
             const sha = mensaje?.sticker?.sha256;
@@ -262,94 +400,121 @@ if (esDomiciliario && !enConversacionActiva && tipo !== 'interactive') {
             }
 
             // ✅ Confirmaciones de pedido
-            if (id === 'confirmar_info' || id === 'confirmar_pago' || id === 'confirmar_compra') {
-                let domiciliario: Domiciliario | null = null;
+    // ✅ Confirmaciones de pedido
+if (id === 'confirmar_info' || id === 'confirmar_pago' || id === 'confirmar_compra') {
+  let domiciliario: Domiciliario | null = null;
 
-                let resumenCliente = '';
+  const st = estadoUsuarios.get(numero) || {};
+  const datos = st?.datos || {};
+  const tipo = st?.tipo || 'servicio';
 
-                const estado = estadoUsuarios.get(numero);
-                const datos = estado?.datos || {};
-                const tipo = estado?.tipo || 'servicio';
+  try {
+    // 1) Intentar asignar
+    domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
 
+    // 2) Crear conversación y puentear a ambos
+    const conversacion = this.conversacionRepo.create({
+      numero_cliente: numero,
+      numero_domiciliario: domiciliario.telefono_whatsapp,
+      fecha_inicio: new Date(),
+      estado: 'activa',
+    });
+    await this.conversacionRepo.save(conversacion);
 
-                
-                try {
-                    domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
+    st.conversacionId = conversacion.id;
+    estadoUsuarios.set(numero, st);
 
-                    
-                    const conversacion = this.conversacionRepo.create({
-                    numero_cliente: numero, // el número del cliente
-                    numero_domiciliario: domiciliario.telefono_whatsapp,
-                    fecha_inicio: new Date(),
-                    estado: 'activa',
-                    });
-                    await this.conversacionRepo.save(conversacion);
-                    estado.conversacionId = conversacion.id;
+    estadoUsuarios.set(`${domiciliario.telefono_whatsapp}`, {
+      conversacionId: conversacion.id,
+      tipo: 'conversacion_activa',
+      inicioMostrado: true,
+    });
 
-
-                    // 🔧 Aquí conectamos al domiciliario con el cliente
-estadoUsuarios.set(`${domiciliario.telefono_whatsapp}`, {
-  conversacionId: conversacion.id,
-  tipo: 'conversacion_activa',
-  inicioMostrado: true,
-});
-                    resumenCliente = `✅ Ya enviamos un domiciliario para ti:
+    // 3) Avisar a cliente
+    await this.enviarMensajeTexto(
+      numero,
+      `✅ Ya enviamos un domiciliario para ti:
 
 👤 *${domiciliario.nombre} ${domiciliario.apellido}*
 🧥 Chaqueta: *${domiciliario.numero_chaqueta}*
 📞 WhatsApp: *${domiciliario.telefono_whatsapp}*
 
-🚀 Está en camino. Gracias por usar *Domicilios W* 🛵💨`;
+🚀 Está en camino. Gracias por usar *Domicilios W* 🛵💨`
+    );
 
-                    await this.enviarMensajeTexto(numero, resumenCliente);
+    // 4) Avisar al domiciliario
+    const resumenPedido = this.generarResumenPedido(datos, tipo, nombre, numero);
+    const telefonoDomiciliario = domiciliario.telefono_whatsapp.replace(/\D/g, '');
+    await this.enviarMensajeTexto(
+      telefonoDomiciliario,
+      `📦 *Nuevo pedido asignado*\n\n${resumenPedido}\n\n👤 Cliente: *${nombre}*\n📞 WhatsApp: ${numero.startsWith('+') ? numero : '+57' + numero.slice(-10)}`
+    );
 
-                    const resumenPedido = this.generarResumenPedido(datos, tipo, nombre, numero);
+    // 5) Registrar pedido como ASIGNADO
+    await this.domiciliosService.create({
+      mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
+      estado: 1, // asignado
+      numero_cliente: numero,
+      fecha: new Date().toISOString(),
+      hora: new Date().toTimeString().slice(0, 5),
+      id_cliente: null,
+      id_domiciliario: domiciliario.id,
+      tipo_servicio: tipo.replace('opcion_', ''),
+      origen_direccion: datos.direccionRecoger ?? '',
+      destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
+      telefono_contacto_origen: datos.telefonoRecoger ?? '',
+      telefono_contacto_destino: datos.telefonoEntregar ?? datos.telefonoEntrega ?? '',
+      notas: '',
+      detalles_pedido: datos.listaCompras ?? '',
+      foto_entrega_url: '',
+    });
 
-const telefonoDomiciliario = domiciliario.telefono_whatsapp.replace(/\D/g, ''); // quita signos y espacios
-                    const mensajeDomiciliario = `📦 *Nuevo pedido asignado*
+    // 🔐 Mensaje final SOLO si hay conversacion activa
+    await this.enviarMensajeTexto(
+      numero,
+      '✅ Ya estás conectado con el domiciliario. Puedes chatear aquí. Escribe *fin* para terminar la conversación.'
+    );
+  } catch (error) {
+    // ❌ No hay domiciliarios disponibles
+    this.logger.warn('⚠️ No hay domiciliarios disponibles en este momento.');
 
-${resumenPedido}
+    // ⚠️ IMPORTANTE: NO crear conversación aquí
+    // Guardamos un flag de espera para no mostrar menú ni romper el flujo
+    st.esperandoAsignacion = true;
+    estadoUsuarios.set(numero, st);
 
-👤 Cliente: *${nombre}*
-📞 WhatsApp: ${numero.startsWith('+') ? numero : '+57' + numero.slice(-10)}`;
+    // 1) Mensaje claro al cliente
+    await this.enviarMensajeTexto(
+      numero,
+      '🕐 *Tu pedido está siendo procesado.* En cuanto uno de nuestros domiciliarios esté disponible, te lo asignaremos y te avisaremos por este chat. Gracias por usar *Domicilios W* 🛵💨'
+    );
 
+    // 2) Registrar pedido como PENDIENTE (sin domiciliario)
+    await this.domiciliosService.create({
+      mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
+      estado: 0, // pendiente
+      numero_cliente: numero,
+      fecha: new Date().toISOString(),
+      hora: new Date().toTimeString().slice(0, 5),
+      id_cliente: null,
+      id_domiciliario: null,
+      tipo_servicio: tipo.replace('opcion_', ''),
+      origen_direccion: datos.direccionRecoger ?? '',
+      destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
+      telefono_contacto_origen: datos.telefonoRecoger ?? '',
+      telefono_contacto_destino: datos.telefonoEntregar ?? datos.telefonoEntrega ?? '',
+      notas: '',
+      detalles_pedido: datos.listaCompras ?? '',
+      foto_entrega_url: '',
+    });
 
-                    this.logger.log(`📤 Enviando pedido al domiciliario ${telefonoDomiciliario}`);
-                    await this.enviarMensajeTexto(telefonoDomiciliario, mensajeDomiciliario);
-                    this.logger.log(`✅ Mensaje enviado al domiciliario ${telefonoDomiciliario}`);
-                } catch (error) {
-                    this.logger.warn('⚠️ No hay domiciliarios disponibles en este momento.');
-                    resumenCliente = `🕐 *En breve uno de nuestros domiciliarios tomará tu pedido*.
-Gracias por usar *Domicilios W* 🛵💨`;
-                    await this.enviarMensajeTexto(numero, resumenCliente);
-                }
+    // (Opcional) Podrías lanzar un proceso de reintento aquí
+    // this.programarReintentoAsignacion(numero);
+  }
 
-                // 🔐 Registrar el pedido incluso si no hay domiciliario
-                await this.domiciliosService.create({
-                    mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
-                    estado: domiciliario ? 1 : 0, // 1 = asignado, 0 = pendiente
-                    numero_cliente: numero,
-                    fecha: new Date().toISOString(),
-                    hora: new Date().toTimeString().slice(0, 5),
-                    id_cliente: null,
-                    id_domiciliario: domiciliario?.id ?? null,
-                    tipo_servicio: tipo.replace('opcion_', ''),
-                    origen_direccion: datos.direccionRecoger ?? '',
-                    destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
-                    telefono_contacto_origen: datos.telefonoRecoger ?? '',
-                    telefono_contacto_destino: datos.telefonoEntregar ?? datos.telefonoEntrega ?? '',
-                    notas: '',
-                    detalles_pedido: datos.listaCompras ?? '',
-                    foto_entrega_url: '',
-                });
-await this.enviarMensajeTexto(
-  numero,
-  '✅ Ya estás conectado con el domiciliario. Puedes chatear aquí. Escribe *fin* para terminar la conversación.'
-);
+  return;
+}
 
-
-                return;
-            }
 
             
             // ✏️ Editar información
@@ -397,21 +562,28 @@ await this.enviarMensajeTexto(
                 case 'opcion_3':
                     await this.opcion3PasoAPaso(numero, '');
                     return;
-                case 'opcion_4':
-                    await this.enviarMensajeTexto(
-                        numero,
-                        '🍽️ Mira nuestras cartas de los mejores *RESTAURANTES DE LA CIUDAD*.\n\n🌐 Ingresa a:\nhttps://domiciliosw.com'
-                    );
-                    estadoUsuarios.delete(numero); // 🔁 Reinicia el chat
-                    return;
+case 'opcion_4':
+  const st4 = estadoUsuarios.get(numero) || { paso: 0, datos: {} };
+  st4.flujoActivo = true;
+  st4.tipo = 'restaurantes';
+  estadoUsuarios.set(numero, st4);
+  await this.enviarMensajeTexto(
+    numero,
+    '🍽️ Mira nuestras cartas de *RESTAURANTES* en: https://domiciliosw.com'
+  );
+  return;
 
-                case 'opcion_5':
-                    await this.enviarMensajeTexto(
-                        numero,
-                        '📞 Para *Peticiones, Sugerencias, Quejas o Reclamos*, comunícate directamente por *WhatsApp* al *3108857311*.\nNuestro equipo de atención al cliente está listo para ayudarte lo antes posible.'
-                    );
-                    estadoUsuarios.delete(numero); // 🔁 Reinicia el chat
-                    return;
+case 'opcion_5':
+  const st5 = estadoUsuarios.get(numero) || { paso: 0, datos: {} };
+  st5.flujoActivo = true;
+  st5.tipo = 'soporte';
+  estadoUsuarios.set(numero, st5);
+  await this.enviarMensajeTexto(
+    numero,
+    '📞 Para PSQR comunícate por WhatsApp al *3108857311*'
+  );
+  return;
+
 
                 default:
                     await this.enviarMensajeTexto(numero, '❓ Opción no reconocida.');
@@ -419,8 +591,33 @@ await this.enviarMensajeTexto(
             }
         }
 
+
+        // ✅ 1. Arrancar conversación con cualquier texto si no hay flujo activo
+const enConversacion = Boolean(estado?.conversacionId);
+const menuBloqueado = bloqueoMenu.has(numero);
+
+if (
+  tipo === 'text' &&
+  !estado?.inicioMostrado &&
+  !this.estaEnCualquierFlujo(numero) && // ⛔ NO mostrar menú si está en flujo
+  !menuBloqueado
+) {
+  await this.enviarMensajeTexto(
+    numero,
+    `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
+
+📲 Pide tu servicio ingresando a nuestra página web:
+🌐 https://domiciliosw.com/`
+  );
+  await this.enviarListaOpciones(numero);
+  estado.inicioMostrado = true;
+  estadoUsuarios.set(numero, estado);
+  return;
+}
+
+
         // ✅ 2. Si el usuario ya está en flujo guiado
-        if (estadoUsuarios.has(numero) && tipo === 'text') {
+       if (estadoUsuarios.has(numero) && tipo === 'text' && estado?.tipo) {
             switch (estado.tipo) {
                 case 'opcion_1':
                     await this.opcion1PasoAPaso(numero, texto);
@@ -432,32 +629,31 @@ await this.enviarMensajeTexto(
                     await this.opcion3PasoAPaso(numero, texto);
                     break;
                 default:
-                    this.logger.warn(`⚠️ Tipo de flujo desconocido para ${numero}`);
-                    break;
++       this.logger.warn(`⚠️ Tipo de flujo desconocido para ${numero} (estado.tipo vacío)`);
             }
             return;
         }
 
 
         // ✅ 3. Enviar saludo y menú solo si no se mostró antes
-        if (!estado.inicioMostrado && numero && texto) {
-            this.logger.log(`📨 Mensaje recibido de ${nombre} (${numero}): "${texto}"`);
+//         if (!estado.inicioMostrado && numero && texto) {
+//             this.logger.log(`📨 Mensaje recibido de ${nombre} (${numero}): "${texto}"`);
 
-            await this.enviarMensajeTexto(
-                numero,
-                `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
+//             await this.enviarMensajeTexto(
+//                 numero,
+//                 `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
 
-📲 Pide tu servicio ingresando a nuestra página web:
-🌐 https://domiciliosw.com/`
-            );
+// 📲 Pide tu servicio ingresando a nuestra página web:
+// 🌐 https://domiciliosw.com/`
+//             );
 
-            await this.enviarListaOpciones(numero);
+//             await this.enviarListaOpciones(numero);
 
-            estado.inicioMostrado = true;
-            estadoUsuarios.set(numero, estado);
-        } else {
-            this.logger.warn('⚠️ Mensaje sin número o texto válido, o saludo ya enviado.');
-        }
+//             estado.inicioMostrado = true;
+//             estadoUsuarios.set(numero, estado);
+//         } else {
+//             this.logger.warn('⚠️ Mensaje sin número o texto válido, o saludo ya enviado.');
+//         }
     }
 
 
@@ -868,5 +1064,8 @@ await this.enviarMensajeTexto(
     }
 
 
+    
 
 }
+
+

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindManyOptions, Repository } from 'typeorm';
 import { Domicilio } from './entities/domicilio.entity';
 import { CreateDomicilioDto } from './dto/create-domicilio.dto';
 import { UpdateDomicilioDto } from './dto/update-domicilio.dto';
@@ -24,6 +24,12 @@ export class DomiciliosService {
       relations: ['domiciliario', 'cliente'],
       order: { fecha_creacion: 'DESC' },
     });
+  }
+
+
+  // ✅ GENÉRICO: buscar con opciones (para el CRON de reintentos)
+  async find(options: FindManyOptions<Domicilio>): Promise<Domicilio[]> {
+    return this.domicilioRepo.find(options);
   }
 
   // 🔎 Obtener uno por ID

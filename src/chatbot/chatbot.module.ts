@@ -8,9 +8,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Conversacion } from './entities/conversacion.entity';
 import { Mensaje } from './entities/mensajes.entity';
 import { ChatService } from './chat.service';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
-  imports: [ComerciosModule, DomiliariosModule, DomiciliosModule,     TypeOrmModule.forFeature([Conversacion, Mensaje])
+  imports: [    ScheduleModule.forRoot(), // 👈 habilita cron/interval/timeout
+ComerciosModule, DomiliariosModule, DomiciliosModule,     TypeOrmModule.forFeature([Conversacion, Mensaje])
 ],
   controllers: [ChatbotController],
   providers: [ChatbotService, ChatService],
