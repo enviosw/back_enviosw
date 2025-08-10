@@ -116,9 +116,12 @@ export class ComerciosService {
   // Obtener un comercio por su ID
   async findOne(id: number): Promise<Comercio> {
     const comercio = await this.comercioRepo.findOneBy({ id });
+
     if (!comercio) {
       throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
     }
+
+    await this.aumentarCLicks(id)
     return comercio;
   }
 
@@ -152,7 +155,6 @@ export class ComerciosService {
   ): Promise<{ data: Comercio[]; total: number; page: number; lastPage: number }> {
     const take = 10;
     const skip = (page - 1) * take;
-
     const subQb = this.comercioRepo
       .createQueryBuilder('comercio')
       .select('comercio.id', 'id')
@@ -183,11 +185,13 @@ export class ComerciosService {
     }
 
     // Obtener IDs aleatorios
-    const idsResult = await subQb
-      .orderBy('RANDOM()')
-      .offset(skip)
-      .limit(take)
-      .getRawMany();
+  const idsResult = await subQb
+    .orderBy('comercio.clicks', 'DESC')          // 1er criterio
+    .addOrderBy('comercio.fecha_creacion', 'DESC') // 2do criterio
+    .offset(skip)
+    .limit(take)
+    .getRawMany();
+
 
     const ids = idsResult.map((row) => row.id);
 
@@ -293,6 +297,11 @@ export class ComerciosService {
       telefono: comercio.telefono,
       direccion: comercio.direccion,
     };
+  }
+
+
+  async aumentarCLicks(id: number): Promise<void> {
+    await this.comercioRepo.increment({ id }, 'clicks', 1)
   }
 
 

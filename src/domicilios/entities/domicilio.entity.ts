@@ -1,78 +1,87 @@
 import {
-    Entity,
-    PrimaryGeneratedColumn,
-    Column,
-    ManyToOne,
-    CreateDateColumn,
-    UpdateDateColumn,
-    JoinColumn,
+  Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn,
+  UpdateDateColumn, JoinColumn, Index
 } from 'typeorm';
 import { Domiciliario } from 'src/domiliarios/entities/domiliario.entity';
 import { Cliente } from 'src/clientes/entities/cliente.entity';
 
+export enum DomicilioEstado {
+  PENDIENTE = 0,
+  ASIGNADO = 1,
+  CANCELADO_TIMEOUT = -1,
+  // agrega otros estados si los tienes
+}
+
 @Entity('domicilios')
+@Index(['estado', 'fecha_creacion'])
 export class Domicilio {
-    @PrimaryGeneratedColumn()
-    id: number;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-    @Column({ type: 'text', nullable: true })
-    mensaje_confirmacion: string;
+  @Column({ type: 'text', nullable: true })
+  mensaje_confirmacion: string;
 
-    @Column({ type: 'int', default: 1 })
-    estado: number; // 1 = pendiente, etc.
+  // 🔁 Usa enum o al menos alinea el default con tu cron
+  @Column({ type: 'int', default: DomicilioEstado.PENDIENTE })
+  estado: number;
 
-    @Column({ type: 'timestamp', nullable: true })
-    fecha: Date;
+  // Si esta "fecha/hora" es la programada del servicio, mantenla; para el timeout usa fecha_creacion
+  @Column({ type: 'timestamp', nullable: true })
+  fecha: Date;
 
-    @Column({ type: 'varchar', length: 5, nullable: true })
-    hora: string;
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  hora: string;
 
-    @Column({ type: 'varchar', length: 20 })
-    numero_cliente: string;
+  @Column({ type: 'varchar', length: 20 })
+  numero_cliente: string;
 
-    // 🔗 Relación con domiciliario
-    @ManyToOne(() => Domiciliario, { nullable: true })
-    @JoinColumn({ name: 'id_domiciliario' })
-    domiciliario: Domiciliario;
+  @ManyToOne(() => Domiciliario, { nullable: true })
+  @JoinColumn({ name: 'id_domiciliario' })
+  domiciliario: Domiciliario;
 
-    // 🔗 Relación con cliente
-    @ManyToOne(() => Cliente, { nullable: true })
-    @JoinColumn({ name: 'id_cliente' })
-    cliente: Cliente;
+  @ManyToOne(() => Cliente, { nullable: true })
+  @JoinColumn({ name: 'id_cliente' })
+  cliente: Cliente;
 
+  @Column({ length: 30 })
+  tipo_servicio: string;
 
-    @Column({ length: 30 })
-    tipo_servicio: string;
+  @Column({ type: 'varchar', length: 255 })
+  origen_direccion: string;
 
+  @Column({ type: 'varchar', length: 255 })
+  destino_direccion: string;
 
-    @Column({ type: 'varchar', length: 255 })
-    origen_direccion: string;
+  @Column({ length: 20, nullable: true })
+  telefono_contacto_origen: string;
 
-    @Column({ type: 'varchar', length: 255 })
-    destino_direccion: string;
+  @Column({ length: 20, nullable: true })
+  telefono_contacto_destino: string;
 
+  @Column({ type: 'text', nullable: true })
+  notas: string;
 
-    @Column({ length: 20, nullable: true })
-    telefono_contacto_origen: string;
+  @Column({ type: 'text', nullable: true })
+  detalles_pedido: string;
 
-    @Column({ length: 20, nullable: true })
-    telefono_contacto_destino: string;
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  foto_entrega_url: string;
 
-    @Column({ type: 'text', nullable: true })
-    notas: string;
+  // ⏱️ Úsala para medir los 8 minutos
+  @CreateDateColumn()
+  fecha_creacion: Date;
 
+  @UpdateDateColumn()
+  fecha_actualizacion: Date;
 
-    @Column({ type: 'text', nullable: true })
-    detalles_pedido: string;
+  // ✅ Nuevo: fecha en que se asignó
+  @Column({ type: 'timestamp', nullable: true })
+  fecha_asignacion: Date | null;
 
+  // ✅ Nuevo: info de cancelación
+  @Column({ type: 'timestamp', nullable: true })
+  fecha_cancelacion: Date | null;
 
-    @Column({ type: 'varchar', length: 255, nullable: true })
-    foto_entrega_url: string;
-
-
-    @CreateDateColumn()
-    fecha_creacion: Date;
-
-    @UpdateDateColumn()
-    fecha_actualizacion: Date;
+  @Column({ type: 'varchar', length: 160, nullable: true })
+  motivo_cancelacion: string | null;
 }

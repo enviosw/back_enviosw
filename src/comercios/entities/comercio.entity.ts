@@ -40,6 +40,9 @@ export class Comercio {
   @Column({ length: 15 })
   telefono: string;
 
+    @Column({ type: 'bigint', default: 0 })
+  clicks: string;
+
   @Column({ length: 15 })
   telefono_secundario: string;
 

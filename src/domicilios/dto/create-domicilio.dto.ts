@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsDateString, Length } from 'class-validator';
 
 export class CreateDomicilioDto {
     @IsString()
@@ -18,7 +18,7 @@ export class CreateDomicilioDto {
     @IsString()
     numero_cliente: string;
 
-     @IsOptional()
+    @IsOptional()
     @IsInt()
     id_domiciliario?: number | null;
 
@@ -55,4 +55,19 @@ export class CreateDomicilioDto {
     @IsString()
     @IsOptional()
     foto_entrega_url?: string;
+
+
+    // --- NUEVOS (opcionales, los setea el sistema) ---
+    @IsOptional()
+    @IsDateString()
+    fecha_asignacion?: string;
+
+    @IsOptional()
+    @IsDateString()
+    fecha_cancelacion?: string;
+
+    @IsOptional()
+    @IsString()
+    @Length(0, 160)
+    motivo_cancelacion?: string;
 }
