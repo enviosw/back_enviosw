@@ -2,8 +2,8 @@ import {
   Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn,
   UpdateDateColumn, JoinColumn, Index
 } from 'typeorm';
-import { Domiciliario } from 'src/domiliarios/entities/domiliario.entity';
-import { Cliente } from 'src/clientes/entities/cliente.entity';
+import { Domiciliario } from '../../domiliarios/entities/domiliario.entity';
+import { Cliente } from '../../clientes/entities/cliente.entity';
 
 export enum DomicilioEstado {
   PENDIENTE = 0,

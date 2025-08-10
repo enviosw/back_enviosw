@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ChatbotService } from './chatbot.service';
 import { ChatbotController } from './chatbot.controller';
-import { ComerciosModule } from 'src/comercios/comercios.module';
-import { DomiliariosModule } from 'src/domiliarios/domiliarios.module';
-import { DomiciliosModule } from 'src/domicilios/domicilios.module';
+import { ComerciosModule } from '../comercios/comercios.module';
+import { DomiliariosModule } from '../domiliarios/domiliarios.module';
+import { DomiciliosModule } from '../domicilios/domicilios.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Conversacion } from './entities/conversacion.entity';
 import { Mensaje } from './entities/mensajes.entity';
