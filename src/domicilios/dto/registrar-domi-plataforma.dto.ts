@@ -16,10 +16,8 @@ export class RegistrarDomiPlataformaDto {
   @MaxLength(20)
   numero_cliente: string;
 
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(30)
-  tipo_servicio: string;
+  @IsOptional()
+  tipo_servicio: any;
 
   @IsString()
   @IsNotEmpty()
