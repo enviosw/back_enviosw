@@ -4,6 +4,7 @@ import { FindManyOptions, Repository } from 'typeorm';
 import { Domicilio } from './entities/domicilio.entity';
 import { CreateDomicilioDto } from './dto/create-domicilio.dto';
 import { UpdateDomicilioDto } from './dto/update-domicilio.dto';
+import { RegistrarDomiPlataformaDto } from './dto/registrar-domi-plataforma.dto';
 
 @Injectable()
 export class DomiciliosService {
@@ -74,6 +75,36 @@ export class DomiciliosService {
 
     return await query.getMany();
   }
+
+
+
+  async registrarDomiPlataforma(dto: RegistrarDomiPlataformaDto) {
+  const parcial = this.domicilioRepo.create({
+    estado: dto.estado,
+    fecha: dto.fecha,
+    numero_cliente: dto.numero_cliente,
+    tipo_servicio: dto.tipo_servicio,
+    origen_direccion: dto.origen_direccion,
+    destino_direccion: dto.destino_direccion,
+    detalles_pedido: dto.detalles_pedido,
+  });
+
+  return this.domicilioRepo.save(parcial);
+}
+
+
+
+/** 📄 Listar SOLO domicilios de tipo_servicio = 3 y estado = 3 */
+async findTipoPlataforma(): Promise<Domicilio[]> {
+  return this.domicilioRepo.find({
+    where: {
+      estado: 3
+    },
+    order: {
+      fecha_creacion: 'DESC'
+    }
+  });
+}
 
 
   

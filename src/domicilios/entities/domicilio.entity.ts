@@ -9,6 +9,7 @@ export enum DomicilioEstado {
   PENDIENTE = 0,
   ASIGNADO = 1,
   CANCELADO_TIMEOUT = -1,
+  PROCESO = 3,
   // agrega otros estados si los tienes
 }
 
