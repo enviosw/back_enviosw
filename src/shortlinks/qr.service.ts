@@ -15,20 +15,26 @@ export class QrService {
     return `${hash}.png`;
   }
 
-  async forShortUrl(shortUrl: string) {
-    const fileName = this.fileFor(shortUrl);
+  // NUEVO: genera QR para cualquier URL FINAL
+  async forUrl(url: string) {
+    const fileName = this.fileFor(url);
     const out = path.join(this.uploadDir, fileName);
 
     await fs.mkdir(this.uploadDir, { recursive: true });
     try { await fs.access(out); } catch {
-      const buf = await QRCode.toBuffer(shortUrl, { width: 512, errorCorrectionLevel: 'M', margin: 1 });
+      const buf = await QRCode.toBuffer(url, { width: 512, errorCorrectionLevel: 'M', margin: 1 });
       await fs.writeFile(out, buf);
     }
 
     return {
-      shortUrl,
-      imagePath: `/static/qrs/${fileName}`,                   // lo sirve Nginx
-      imageUrl: `${this.publicBase}/static/qrs/${fileName}`,  // URL pública
+      url,
+      imagePath: `/uploads/qrs/${fileName}`,
+      imageUrl: `${this.publicBase}/uploads/qrs/${fileName}`,
     };
+  }
+
+  // (opcional) dejas este si aún quieres soportar shortlinks
+  async forShortUrl(shortUrl: string) {
+    return this.forUrl(shortUrl);
   }
 }

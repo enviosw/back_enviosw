@@ -14,17 +14,17 @@ export class ComerciosQrController {
   @Post(':id/qr')
   async issueQr(@Param('id') id: string) {
     const commerceId = Number(id);
-    const link = await this.sl.ensureForCommerce(commerceId);
-    const shortUrl = `${process.env.PUBLIC_BASE_URL || 'http://localhost:3000'}/s/${link.slug}`;
-    const png = await this.qr.forShortUrl(shortUrl);
+
+    // construye la URL final usando tu env DESTINO_BASE
+    const base = process.env.DESTINO_BASE || 'https://domiciliosw.com/comercio';
+    const targetUrl = `${base}/${commerceId}/productos`;
+
+    const png = await this.qr.forUrl(targetUrl);
     return {
       comercioId: commerceId,
-      slug: link.slug,
-      shortUrl,
-      imageUrl: png.imageUrl,     // <- pega esto en tu panel / compártelo
+      targetUrl,            // <- ahora el QR apunta directo aquí
+      imageUrl: png.imageUrl,
       imagePath: png.imagePath,
-      targetUrl: link.targetUrl,  // a donde redirige
-      active: link.active,
     };
   }
 
