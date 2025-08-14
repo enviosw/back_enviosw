@@ -17,6 +17,8 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { ChatbotModule } from './chatbot/chatbot.module';
 import { DomiliariosModule } from './domiliarios/domiliarios.module';
 import { DomiciliosModule } from './domicilios/domicilios.module';
+import { ShortlinksModule } from './shortlinks/shortlinks.module';
+import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
 
 @Module({
   imports: [
@@ -72,6 +74,10 @@ import { DomiciliosModule } from './domicilios/domicilios.module';
     DomiliariosModule,
 
     DomiciliosModule,
+
+    ShortlinksModule,
+    
+    ComerciosQrModule,
   ],
 })
 export class AppModule { }
