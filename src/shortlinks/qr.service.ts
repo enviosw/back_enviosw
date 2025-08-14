@@ -28,8 +28,8 @@ export class QrService {
 
     return {
       url,
-      imagePath: `/uploads/qrs/${fileName}`,
-      imageUrl: `${this.publicBase}/uploads/qrs/${fileName}`,
+      imagePath: `/api/qrs/${fileName}`,
+      imageUrl: `${this.publicBase}/api/qrs/${fileName}`,
     };
   }
 
