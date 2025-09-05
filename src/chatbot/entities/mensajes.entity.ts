@@ -15,8 +15,9 @@ export class Mensaje {
   @Column()
   receptor: string;
 
-  @Column('text')
-  contenido: string;
+  @Column('text', { nullable: true })
+  contenido?: string | null;
+
 
   @CreateDateColumn()
   timestamp: Date;
