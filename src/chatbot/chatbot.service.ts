@@ -83,9 +83,8 @@ export class ChatbotService {
     return [recoger, entregar, lista].filter(Boolean).join('\n\n') + tipoTxt;
   }
 
-  // 🕑 Corre cada 2 minutos
-  // 🕑 Corre cada 2 minutos
-  @Cron('*/2 * * * *')
+  
+@Cron('*/1 * * * *') // cada minuto
   async reintentarAsignacionPendientes(): Promise<void> {
     if (this.isRetryRunning) {
       this.logger.log('⏳ Reintento ya en ejecución; se omite esta corrida.');
