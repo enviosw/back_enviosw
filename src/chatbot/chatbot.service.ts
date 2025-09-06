@@ -17,26 +17,7 @@ const temporizadoresEstado = new Map<string, NodeJS.Timeout>(); // TTL para soli
 const bloqueoMenu = new Map<string, NodeJS.Timeout>(); // Bloqueo temporal del menú
 
 
-async function reiniciarPorInactividad(numero: string, enviarMensajeTexto: Function) {
-  estadoUsuarios.delete(numero);
-  temporizadoresInactividad.delete(numero);
 
-  // Notificar cierre automático del chat por inactividad
-  await this.enviarMensajeTexto(numero, '🚨');
-
-  const cierre = [
-    '⏳ Como no recibimos más mensajes, el chat fue finalizado automáticamente.',
-    'Escribe *hola* si deseas empezar de nuevo.',
-    '',
-    '📕✨ *El chat se cerró automáticamente por inactividad*',
-    '👉 ¡Pero aquí sigo listo para ayudarte!',
-    '',
-    'Escribe *Hola* y volvemos a empezar un nuevo chat 🚀💬'
-  ].join('\n');
-
-  await this.enviarMensajeTexto(numero, cierre);
-
-}
 
 @Injectable()
 export class ChatbotService {
@@ -58,6 +39,34 @@ export class ChatbotService {
     private readonly mensajeRepo: Repository<Mensaje>,
 
   ) { }
+
+  // ⏰ Cierre por inactividad (10 min)
+  // No aplica si hay conversación activa o si el pedido está confirmado / esperando asignación
+  private async reiniciarPorInactividad(numero: string) {
+    const st = estadoUsuarios.get(numero) || {};
+
+    if (st?.conversacionId) return;          // ya en chat con domiciliario
+    if (st?.confirmadoPedido === true) return;     // ya confirmó
+    if (st?.esperandoAsignacion === true) return;  // confirmado pero esperando domi
+
+    estadoUsuarios.delete(numero);
+    if (temporizadoresInactividad.has(numero)) {
+      clearTimeout(temporizadoresInactividad.get(numero)!);
+      temporizadoresInactividad.delete(numero);
+    }
+
+    await this.enviarMensajeTexto(numero, '🚨');
+
+    const cierre = [
+      '📕✨ *El chat se cerró automáticamente por inactividad*',
+      '👉 ¡Pero aquí sigo listo para ayudarte!',
+      '',
+      'Escribe *Hola* y volvemos a empezar un nuevo chat 🚀💬'
+    ].join('\n');
+
+    await this.enviarMensajeTexto(numero, cierre);
+  }
+
 
   // 🧠 helper: armar resumen desde registro de pedido en BD (no desde "datos")
   private generarResumenPedidoDesdePedido(pedido: any): string {
@@ -418,20 +427,9 @@ export class ChatbotService {
     const textoLimpio = (texto || '').trim().toLowerCase();
 
 
-    estado.ultimoMensaje = Date.now(); // ⏱️ Guarda la hora
+    estado.ultimoMensaje = Date.now();
+    this.programarInactividad(numero);
 
-    // Borra temporizador anterior si existe
-    if (temporizadoresInactividad.has(numero)) {
-      clearTimeout(temporizadoresInactividad.get(numero));
-    }
-
-    // Crea nuevo temporizador
-    const timeout = setTimeout(() => {
-      reiniciarPorInactividad(numero, this.enviarMensajeTexto.bind(this));
-
-    }, 10 * 60 * 1000); // ⏳ 5 minutos
-
-    temporizadoresInactividad.set(numero, timeout);
 
 
     // ✅ Reiniciar si el usuario escribe un saludo/comando
@@ -443,10 +441,10 @@ export class ChatbotService {
       }
       await this.enviarMensajeTexto(
         numero,
-        `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
+        `👋 Hola *${String(nombre)}*, soy *Wilber*, tu asistente virtual de *DOMICILIOS W*
 
-📲 Pide tu servicio ingresando a nuestra página web:
-🌐 https://domiciliosw.com/`
+🛵💨 Pide tu servicio ingresando a nuestra *página web*:
+🌐 https://domiciliosw.com`
       );
       await this.enviarSticker(numero, '3908588892738247');
       await this.enviarListaOpciones(numero);
@@ -855,13 +853,13 @@ export class ChatbotService {
           //     text: '¡Hola, soy Wilber!',
           // },
           body: {
-            text: `👇 O selecciona el servicio que deseas:`,
+            text: `*O selecciona el servicio que deseas:* 👇`,
           },
-          footer: {
-            text: 'Estamos para servirte 🧡',
-          },
+          // footer: {
+          //   text: 'Estamos para servirte 🧡',
+          // },
           action: {
-            button: 'Ver opciones',
+            button: 'Pedir servicio 🛵',
             sections: [
               {
                 title: 'Servicios disponibles',
@@ -1269,50 +1267,50 @@ export class ChatbotService {
 
 
 
-private async cancelarPedidoDesdeCliente(numero: string): Promise<void> {
-  try {
-    const st = estadoUsuarios.get(numero) || {};
-    const pedidoId: number | undefined = st.pedidoId;
-    if (!pedidoId) return;
+  private async cancelarPedidoDesdeCliente(numero: string): Promise<void> {
+    try {
+      const st = estadoUsuarios.get(numero) || {};
+      const pedidoId: number | undefined = st.pedidoId;
+      if (!pedidoId) return;
 
-    const pedido = await this.getPedidoById(pedidoId);
-    if (!pedido) {
-      await this.enviarMensajeTexto(numero, '⚠️ No pude encontrar tu pedido. Intenta nuevamente.');
-      return;
-    }
+      const pedido = await this.getPedidoById(pedidoId);
+      if (!pedido) {
+        await this.enviarMensajeTexto(numero, '⚠️ No pude encontrar tu pedido. Intenta nuevamente.');
+        return;
+      }
 
-    // 🛡️ Bloqueo: solo cancelar si sigue pendiente
-    if (!(await this.puedeCancelarPedido(pedidoId))) {
+      // 🛡️ Bloqueo: solo cancelar si sigue pendiente
+      if (!(await this.puedeCancelarPedido(pedidoId))) {
+        await this.enviarMensajeTexto(
+          numero,
+          '🔒 Este pedido ya fue confirmado con el domiciliario y no se puede cancelar por este medio.\n' +
+          'Si necesitas ayuda, escríbenos por soporte.'
+        );
+        return;
+      }
+
+      // ✅ Cancelación permitida (estado=0)
+      await this.domiciliosService.update(pedidoId, {
+        estado: 2, // cancelado
+        motivo_cancelacion: 'Cancelado por el cliente vía WhatsApp',
+      });
+
+      // ... (resto de tu lógica de notificación/ cierre de conversación si existía)
       await this.enviarMensajeTexto(
         numero,
-        '🔒 Este pedido ya fue confirmado con el domiciliario y no se puede cancelar por este medio.\n' +
-        'Si necesitas ayuda, escríbenos por soporte.'
+        '🧡 Tu pedido ha sido *cancelado*. ¡Gracias por usar Domicilios W!'
       );
-      return;
+
+      const s = estadoUsuarios.get(numero) || {};
+      s.esperandoAsignacion = false;
+      estadoUsuarios.set(numero, s);
+      if (bloqueoMenu.has(numero)) bloqueoMenu.delete(numero);
+
+    } catch (err) {
+      this.logger.error(`❌ Error cancelando pedido: ${err?.message || err}`);
+      await this.enviarMensajeTexto(numero, '⚠️ Ocurrió un problema al cancelar. Intenta nuevamente en unos segundos.');
     }
-
-    // ✅ Cancelación permitida (estado=0)
-    await this.domiciliosService.update(pedidoId, {
-      estado: 2, // cancelado
-      motivo_cancelacion: 'Cancelado por el cliente vía WhatsApp',
-    });
-
-    // ... (resto de tu lógica de notificación/ cierre de conversación si existía)
-    await this.enviarMensajeTexto(
-      numero,
-      '🧡 Tu pedido ha sido *cancelado*. ¡Gracias por usar Domicilios W!'
-    );
-
-    const s = estadoUsuarios.get(numero) || {};
-    s.esperandoAsignacion = false;
-    estadoUsuarios.set(numero, s);
-    if (bloqueoMenu.has(numero)) bloqueoMenu.delete(numero);
-
-  } catch (err) {
-    this.logger.error(`❌ Error cancelando pedido: ${err?.message || err}`);
-    await this.enviarMensajeTexto(numero, '⚠️ Ocurrió un problema al cancelar. Intenta nuevamente en unos segundos.');
   }
-}
 
 
   // Lee un pedido por id (compat con tus métodos actuales)
@@ -1469,6 +1467,19 @@ private async cancelarPedidoDesdeCliente(numero: string): Promise<void> {
     const pedido = await this.getPedidoById(pedidoId);
     if (!pedido) return false;
     return pedido.estado === 0; // 0 = pendiente (sin domiciliario confirmado)
+  }
+
+  private programarInactividad(numero: string) {
+    // limpia previo
+    if (temporizadoresInactividad.has(numero)) {
+      clearTimeout(temporizadoresInactividad.get(numero)!);
+    }
+
+    const t = setTimeout(() => {
+      this.reiniciarPorInactividad(numero);
+    }, 10 * 60 * 1000); // 10 minutos
+
+    temporizadoresInactividad.set(numero, t);
   }
 
 
