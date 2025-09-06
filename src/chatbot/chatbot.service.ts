@@ -404,8 +404,22 @@ export class ChatbotService {
       const finales = ['fin', 'final', 'terminar', 'salir', 'acabar'];
 
       if (entrada && finales.some(p => entrada.startsWith(p))) {
-        await this.enviarMensajeTexto(numero, '✅ Has finalizado la conversación.');
-        await this.enviarMensajeTexto(receptor, '✅ Pedido finalizado somos Domicilios W, Tu mejor opción.');
+await this.enviarMensajeTexto(
+  numero,
+  `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+Gracias por tu entrega y compromiso 👏
+
+👉 *Ahora elige tu estado:*
+✅ Disponible
+🛑 No disponible`
+);
+
+await this.enviarMensajeTexto(
+  receptor,
+  `✨ ¡GRACIAS POR CONFIAR EN NOSOTROS!
+✅ Tu pedido ha finalizado con éxito si deseas otro servicio escribe hola
+👉 Domiciliosw.com: rápidos, seguros y confiables.`
+);
 
         conversacion.estado = 'finalizada';
         conversacion.fecha_fin = new Date();
@@ -575,6 +589,8 @@ export class ChatbotService {
             `✅ Ya estás conectado con el cliente en este chat. ¡Respóndele aquí!`
           );
 
+          
+
 
           // 5) Registrar pedido como ASIGNADO
           const pedidoCreado = await this.domiciliosService.create({
@@ -602,10 +618,14 @@ export class ChatbotService {
 
 
           // 🔐 Mensaje final SOLO si hay conversacion activa
-          await this.enviarMensajeTexto(
-            numero,
-            '✅ Ya estás conectado con el domiciliario. Desde aquí puedes chatear, dar recomendaciones y consultar el estado de tu pedido.'
-          );
+  await this.enviarMensajeTexto(
+  numero,
+  `🚴‍♂️ ¡*TU DOMICILIARIO* ya está en línea contigo!
+📲 Escríbele si necesitas algo extra.
+
+⚠️ Cada que desees un servicio, por seguridad, mantén siempre contacto con la empresa 📞 *3134089563*`
+);
+
         } catch (error) {
           // ❌ No hay domiciliarios disponibles
           this.logger.warn('⚠️ No hay domiciliarios disponibles en este momento.');
