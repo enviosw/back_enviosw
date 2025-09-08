@@ -493,7 +493,7 @@ Gracias por tu entrega y compromiso 👏
 🛵💨 Pide tu servicio ingresando a nuestra *página web*:
 🌐 https://domiciliosw.com`
       );
-      await this.enviarSticker(numero, String(stickerConstants.stickerId));
+      // await this.enviarSticker(numero, String(stickerConstants.stickerId));
       await this.enviarListaOpciones(numero);
       return;
     }
