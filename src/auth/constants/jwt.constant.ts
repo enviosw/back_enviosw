@@ -16,3 +16,8 @@ export const whatsappConstants = {
   apiVersion: process.env.API_VERSION,
   baseUrl: process.env.BASE_URL,
 };
+
+export const stickerConstants = {
+  stickerId: process.env.ID_STICKER,
+  stickerChad: process.env.SHAD_STICKER,
+};
