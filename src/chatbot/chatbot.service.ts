@@ -17,6 +17,14 @@ const temporizadoresInactividad = new Map<string, NodeJS.Timeout>(); // ⏰ Temp
 const temporizadoresEstado = new Map<string, NodeJS.Timeout>(); // TTL para solicitar estado a domiciliario
 const bloqueoMenu = new Map<string, NodeJS.Timeout>(); // Bloqueo temporal del menú
 
+const ESTADO_COOLDOWN_MS = 5 * 60 * 1000; // 5 min
+
+function isExpired(ts?: number) {
+  return !ts || Date.now() >= ts;
+}
+
+
+
 
 
 
@@ -84,38 +92,38 @@ export class ChatbotService {
   //   return [recoger, entregar, lista].filter(Boolean).join('\n\n') + tipoTxt;
   // }
 
-// 🧠 helper: armar resumen desde registro de pedido en BD (con trato especial a "sticker")
-private generarResumenPedidoDesdePedido(pedido: any): string {
-  const esSticker = String(pedido?.tipo_servicio || '').toLowerCase() === 'sticker';
+  // 🧠 helper: armar resumen desde registro de pedido en BD (con trato especial a "sticker")
+  private generarResumenPedidoDesdePedido(pedido: any): string {
+    const esSticker = String(pedido?.tipo_servicio || '').toLowerCase() === 'sticker';
 
-  if (esSticker) {
-    // ⚡ Pedido rápido por sticker: solo lo mínimo para el domiciliario
+    if (esSticker) {
+      // ⚡ Pedido rápido por sticker: solo lo mínimo para el domiciliario
+      const recoger = pedido.origen_direccion
+        ? `📍 Recoger: ${pedido.origen_direccion}`
+        : '';
+      const tel = pedido.telefono_contacto_origen
+        ? `📞 Tel: ${pedido.telefono_contacto_origen}`
+        : '';
+
+      return ['⚡ Pedido rápido (sticker)', recoger, tel]
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    // 🧾 Comportamiento normal para los demás tipos
     const recoger = pedido.origen_direccion
-      ? `📍 Recoger: ${pedido.origen_direccion}`
+      ? `📍 *Recoger en:* ${pedido.origen_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_origen || '-'}`
       : '';
-    const tel = pedido.telefono_contacto_origen
-      ? `📞 Tel: ${pedido.telefono_contacto_origen}`
+    const entregar = pedido.destino_direccion
+      ? `🏠 *Entregar en:* ${pedido.destino_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_destino || '-'}`
       : '';
+    const lista = pedido.detalles_pedido
+      ? `🛒 *Lista de compras:*\n${pedido.detalles_pedido}`
+      : '';
+    const tipoTxt = pedido.tipo_servicio ? `\n\n🔁 Tipo de servicio: *${pedido.tipo_servicio}*` : '';
 
-    return ['⚡ Pedido rápido (sticker)', recoger, tel]
-      .filter(Boolean)
-      .join('\n');
+    return [recoger, entregar, lista].filter(Boolean).join('\n\n') + tipoTxt;
   }
-
-  // 🧾 Comportamiento normal para los demás tipos
-  const recoger = pedido.origen_direccion
-    ? `📍 *Recoger en:* ${pedido.origen_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_origen || '-'}`
-    : '';
-  const entregar = pedido.destino_direccion
-    ? `🏠 *Entregar en:* ${pedido.destino_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_destino || '-'}`
-    : '';
-  const lista = pedido.detalles_pedido
-    ? `🛒 *Lista de compras:*\n${pedido.detalles_pedido}`
-    : '';
-  const tipoTxt = pedido.tipo_servicio ? `\n\n🔁 Tipo de servicio: *${pedido.tipo_servicio}*` : '';
-
-  return [recoger, entregar, lista].filter(Boolean).join('\n\n') + tipoTxt;
-}
 
 
   @Cron('*/1 * * * *') // cada minuto
@@ -236,7 +244,7 @@ private generarResumenPedidoDesdePedido(pedido: any): string {
             `🧥 Chaqueta: *${domiciliario.numero_chaqueta}*\n` +
             `📞 WhatsApp: *${domiciliario.telefono_whatsapp}*\n\n` +
             `✅ Ya estás conectado con el domiciliario desde este chat. ¡Respóndele aquí!`
- 
+
           );
 
           // 6) Notificar al domiciliario
@@ -251,6 +259,8 @@ private generarResumenPedidoDesdePedido(pedido: any): string {
             }\n\n` +
             `✅ Ya estás conectado con el cliente en este chat. ¡Respóndele aquí!`
           );
+
+          await this.enviarBotonFinalizarAlDomi(telefonoDomiciliario);
 
 
           // 7) Conectar en memoria para que fluya el chat
@@ -332,52 +342,122 @@ private generarResumenPedidoDesdePedido(pedido: any): string {
 
     const esDomiciliario = await this.domiciliarioService.esDomiciliario(numero);
     // Solo mostrar botones si NO es respuesta interactiva (para evitar bucle)
+    // Solo mostrar botones si NO es respuesta interactiva (para evitar bucle)
     const enConversacionActiva =
       estadoUsuarios.has(numero) && estadoUsuarios.get(numero)?.conversacionId;
 
     if (esDomiciliario && !enConversacionActiva && tipo !== 'interactive') {
       const st = estadoUsuarios.get(numero) || {};
-      if (st.awaitingEstado) {
-        this.logger.log(`⏭️ Ya se pidió estado a ${numero}; no se reenvía.`);
+
+      // NEW: si hay candado pero YA Venció, lo limpiamos para poder volver a pedir
+      if (st.awaitingEstado && isExpired(st.awaitingEstadoExpiresAt)) {
+        this.logger.log(`🔓 Cooldown vencido para ${numero}; se permite re-pedir estado.`);
+        st.awaitingEstado = false;
+        st.awaitingEstadoExpiresAt = undefined;
+        // limpia TTL viejo si existiera
+        if (temporizadoresEstado.has(numero)) {
+          clearTimeout(temporizadoresEstado.get(numero)!);
+          temporizadoresEstado.delete(numero);
+        }
+        estadoUsuarios.set(numero, st);
+      }
+
+      // Si aún está activo y NO ha vencido, no reenviar
+      if (st.awaitingEstado && !isExpired(st.awaitingEstadoExpiresAt)) {
+        this.logger.log(`⏭️ Ya se pidió estado a ${numero}; aún en cooldown.`);
         return;
       }
 
+      // NEW: activa candado con expiración a 5 minutos
       st.awaitingEstado = true;
+      st.awaitingEstadoExpiresAt = Date.now() + ESTADO_COOLDOWN_MS;
       estadoUsuarios.set(numero, st);
 
-      // TTL de seguridad (5 min)
+      // TTL en memoria para limpiar flags a los 5 min (resiliente si nunca llega respuesta)
       if (temporizadoresEstado.has(numero)) {
         clearTimeout(temporizadoresEstado.get(numero)!);
       }
       const t = setTimeout(() => {
         const s = estadoUsuarios.get(numero) || {};
         s.awaitingEstado = false;
+        s.awaitingEstadoExpiresAt = undefined;
         estadoUsuarios.set(numero, s);
         temporizadoresEstado.delete(numero);
-        this.logger.log(`⏳ TTL expiró; limpiada awaitingEstado de ${numero}`);
-      }, 10 * 60 * 1000);
+        this.logger.log(`⏳ Cooldown de estado expiró para ${numero}; desbloqueado.`);
+      }, ESTADO_COOLDOWN_MS);
       temporizadoresEstado.set(numero, t);
 
-      await this.enviarMensajeTexto(numero, '👋 Hola, ¿qué estado deseas establecer?');
+      // 1) Obtener estado (solo esto en try/catch)
+      let disponible: boolean, turno: number, nombreDomi: string;
+      try {
+        const res = await this.domiciliarioService.getEstadoPorTelefono(numero);
+        disponible = res.disponible;
+        turno = res.turno;
+        nombreDomi = res.nombre;
+      } catch (e) {
+        this.logger.warn(`⚠️ No se pudo obtener estado actual para ${numero}: ${e?.message || e}`);
+        await this.enviarMensajeTexto(numero, '❌ No encontré tu perfil como domiciliario.');
 
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'Selecciona tu estado actual:' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'no_disponible', title: '🛑 No disponible' } },
-            ],
+        // NEW: ante error, libera el candado para permitir reintento manual inmediato
+        const s = estadoUsuarios.get(numero) || {};
+        s.awaitingEstado = false;
+        s.awaitingEstadoExpiresAt = undefined;
+        estadoUsuarios.set(numero, s);
+
+        if (temporizadoresEstado.has(numero)) {
+          clearTimeout(temporizadoresEstado.get(numero)!);
+          temporizadoresEstado.delete(numero);
+        }
+        return;
+      }
+
+      const estadoTxt = disponible ? '✅ DISPONIBLE' : '🛑 NO DISPONIBLE';
+      const nextId = disponible ? 'cambiar_a_no_disponible' : 'cambiar_a_disponible';
+      const nextLbl = disponible ? '🛑 No disponible' : '✅ Disponible'; // <= 20 chars
+      const keepLbl = '↩️ Mantener'; // <= 20 chars
+
+      try {
+        await this.enviarMensajeTexto(
+          numero,
+          `👋 Hola ${nombreDomi || ''}\n` +
+          `Tu *estado actual* es: ${estadoTxt}\n` +
+          `🔢 Tu turno actual es: *${turno}*\n\n` +
+          `¿Deseas cambiar tu estado?`
+        );
+
+        await axiosWhatsapp.post('/messages', {
+          messaging_product: 'whatsapp',
+          to: numero,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: { text: 'Elige una opción:' },
+            action: {
+              buttons: [
+                { type: 'reply', reply: { id: nextId, title: nextLbl } },
+                { type: 'reply', reply: { id: 'mantener_estado', title: keepLbl } },
+              ],
+            },
           },
-        },
-      });
+        });
+      } catch (e) {
+        this.logger.warn(`⚠️ Falló el envío de botones a ${numero}: ${e?.response?.data?.error?.message || e?.message || e}`);
 
+        // NEW: si el envío falló, no tiene sentido mantener bloqueado; libera para reintento
+        const s = estadoUsuarios.get(numero) || {};
+        s.awaitingEstado = false;
+        s.awaitingEstadoExpiresAt = undefined;
+        estadoUsuarios.set(numero, s);
+
+        if (temporizadoresEstado.has(numero)) {
+          clearTimeout(temporizadoresEstado.get(numero)!);
+          temporizadoresEstado.delete(numero);
+        }
+      }
       return;
     }
+
+
 
 
     // 🔎 Detección mínima basada SOLO en el prefijo "pedido desde"
@@ -426,77 +506,136 @@ private generarResumenPedidoDesdePedido(pedido: any): string {
       });
 
 
-      const entrada = texto
-        ?.trim()
-        .toLowerCase()
-        .normalize('NFD') // separa acentos
-        .replace(/[\u0300-\u036f]/g, ''); // elimina acentos
+            const entrada = texto
+              ?.trim()
+              .toLowerCase()
+              .normalize('NFD') // separa acentos
+              .replace(/[\u0300-\u036f]/g, ''); // elimina acentos
 
 
-      // 🔚 Si escriben "fin", finalizar conversación
-      const finales = ['fin', 'final', 'terminar', 'salir', 'acabar'];
+            // 🔚 Si escriben "fin", finalizar conversación
+            const finales = ['fin_domi', 'fin-domi', 'Fin_domi', 'Fin-domi', 'fin domi'];
 
-      if (entrada && finales.some(p => entrada.startsWith(p))) {
-        await this.enviarMensajeTexto(
+            if (entrada && finales.some(p => entrada.startsWith(p))) {
+      //         await this.enviarMensajeTexto(
+      //           numero,
+      //           `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+      // Gracias por tu entrega y compromiso 👏
+
+      // 👉 *Ahora elige tu estado:*
+      // ✅ Disponible
+      // 🛑 No disponible`
+      //         );
+
+                      await this.enviarMensajeTexto(
           numero,
           `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
 Gracias por tu entrega y compromiso 👏
 
-👉 *Ahora elige tu estado:*
-✅ Disponible
-🛑 No disponible`
+👉 *Ahora elige tu estado:*`
         );
 
-        await this.enviarMensajeTexto(
-          receptor,
-          `✨ ¡GRACIAS POR CONFIAR EN NOSOTROS!
-✅ Tu pedido ha finalizado con éxito si deseas otro servicio escribe hola
-👉 Domiciliosw.com: rápidos, seguros y confiables.`
-        );
 
-        conversacion.estado = 'finalizada';
-        conversacion.fecha_fin = new Date();
-        await this.conversacionRepo.save(conversacion);
+                try {
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: numero,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: 'Cambia tu disponibilidad:' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  // (Opcional) { type: 'reply', reply: { id: 'mantener_estado', title: '↩️ Mantener' } },
+                ],
+              },
+            },
+          });
+        } catch (e) {
+          this.logger.warn(
+            `⚠️ Falló envío de botones de estado a ${numero}: ` +
+            (e?.response?.data?.error?.message || e?.message || e)
+          );
+        }
 
-        estadoUsuarios.delete(numero);
-        estadoUsuarios.delete(receptor);
-        temporizadoresInactividad.delete(numero);
-        temporizadoresInactividad.delete(receptor);
 
+              await this.enviarMensajeTexto(
+                receptor,
+                `✅ ¡Gracias por confiar en nosotros!
+Tu pedido ha sido finalizado con éxito.
+
+📲 Para mayor seguridad y confianza en todos nuestros servicios, recuerda escribir siempre al 313 408 9563.
+Domiciliosw.com`
+              );
+
+
+              conversacion.estado = 'finalizada';
+              conversacion.fecha_fin = new Date();
+              await this.conversacionRepo.save(conversacion);
+
+              estadoUsuarios.delete(numero);
+              estadoUsuarios.delete(receptor);
+              temporizadoresInactividad.delete(numero);
+              temporizadoresInactividad.delete(receptor);
+
+              return;
+            }
+
+      // Reenviar el mensaje al otro participante
+      // Reenviar el mensaje al otro participante
+      if (tipo === 'text' && texto) {
+        await this.enviarMensajeTexto(receptor, `💬 ${texto}`);
+
+        // Si el mensaje lo envía el CLIENTE, puedes (si quieres) mostrarle el botón de finalizar al DOMI:
+        if (esCliente) {
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: receptor, // DOMICILIARIO
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Deseas finalizar el pedido?' },
+                action: { buttons: [{ type: 'reply', reply: { id: 'fin_domi', title: '✅ Finalizar' } }] },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(
+              `⚠️ Falló botón fin_domi a ${receptor}: ` +
+              (e?.response?.data?.error?.message || e?.message || e)
+            );
+          }
+        }
         return;
       }
 
-      // Reenviar el mensaje al otro participante
-      await this.enviarMensajeTexto(receptor, `💬 ${texto}`);
-      return;
     }
 
-    const textoLimpio = (texto || '').trim().toLowerCase();
+    // const textoLimpio = (texto || '').trim().toLowerCase();
 
 
-    estado.ultimoMensaje = Date.now();
-    this.programarInactividad(numero);
+estado.ultimoMensaje = Date.now();
+this.programarInactividad(numero);
 
-
-
-    // ✅ Reiniciar si el usuario escribe un saludo/comando
-    const triggersReinicio = ['hola', 'menu', 'inicio', 'empezar', 'buenas', 'buenos dias', 'buenas tardes', 'buenas noches'];
-    if (tipo === 'text' && triggersReinicio.some(t => textoLimpio.includes(t))) {
-      estadoUsuarios.delete(numero);
-      if (estado?.conversacionId) {
-        await this.conversacionRepo.update(estado.conversacionId, { fecha_fin: new Date(), estado: 'finalizada' });
-      }
-      await this.enviarMensajeTexto(
-        numero,
-        `👋 Hola *${String(nombre)}*, soy *Wilber*, tu asistente virtual de *DOMICILIOS W*
+// ✅ Reiniciar solo si el mensaje es EXACTAMENTE el comando (no frases)
+if (tipo === 'text' && this.esComandoReinicioSolo(texto)) {
+  estadoUsuarios.delete(numero);
+  if (estado?.conversacionId) {
+    await this.conversacionRepo.update(estado.conversacionId, { fecha_fin: new Date(), estado: 'finalizada' });
+  }
+  await this.enviarMensajeTexto(
+    numero,
+    `👋 Hola *${String(nombre)}*, soy *Wilber*, tu asistente virtual de *DOMICILIOS W*
 
 🛵💨 Pide tu servicio ingresando a nuestra *página web*:
 🌐 https://domiciliosw.com`
-      );
-      // await this.enviarSticker(numero, String(stickerConstants.stickerId));
-      await this.enviarListaOpciones(numero);
-      return;
-    }
+  );
+  await this.enviarListaOpciones(numero);
+  return;
+}
+
 
     if (tipo === 'sticker') {
       const sha = mensaje?.sticker?.sha256;
@@ -550,37 +689,245 @@ Gracias por tu entrega y compromiso 👏
       }
 
 
-      // 🔄 Actualizar estado del domiciliario
-      if (id === 'disponible' || id === 'no_disponible') {
-        const disponible = id === 'disponible';
+      // dentro de: if (mensaje?.interactive?.type === 'button_reply') { ... }
+      if (id === 'fin_domi') {
+        // 1) Obtener conversación activa desde el emisor del botón
+        const st = estadoUsuarios.get(numero);
+        const conversacionId = st?.conversacionId;
+        if (!conversacionId) {
+          await this.enviarMensajeTexto(numero, '⚠️ No encontré una conversación activa para finalizar.');
+          return;
+        }
+
+        const conversacion = await this.conversacionRepo.findOne({ where: { id: conversacionId } });
+        if (!conversacion) {
+          await this.enviarMensajeTexto(numero, '⚠️ No se encontró la conversación en el sistema.');
+          return;
+        }
+
+        const cliente = conversacion.numero_cliente;
+        const domi = conversacion.numero_domiciliario;
+
+        // 2) (Opcional pero recomendable) Solo el DOMICILIARIO puede finalizar
+        if (numero !== domi) {
+          await this.enviarMensajeTexto(numero, '⛔ Solo el domiciliario puede finalizar este pedido.');
+          return;
+        }
+
+        // 3) Mensajes de cierre
+        //    3.1) Al DOMICILIARIO: texto + BOTONES para fijar disponibilidad
+        await this.enviarMensajeTexto(
+          domi,
+          `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+Gracias por tu entrega y compromiso 👏
+
+👉 *Ahora elige tu estado:*`
+        );
 
         try {
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: domi,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: 'Cambia tu disponibilidad:' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  // (Opcional) { type: 'reply', reply: { id: 'mantener_estado', title: '↩️ Mantener' } },
+                ],
+              },
+            },
+          });
+        } catch (e) {
+          this.logger.warn(
+            `⚠️ Falló envío de botones de estado a ${domi}: ` +
+            (e?.response?.data?.error?.message || e?.message || e)
+          );
+        }
+
+        //    3.2) Al CLIENTE: gracias y cierre
+        await this.enviarMensajeTexto(
+          cliente,
+          `✅ ¡Gracias por confiar en nosotros!
+Tu pedido ha sido finalizado con éxito.
+
+📲 Para mayor seguridad y confianza en todos nuestros servicios, recuerda escribir siempre al 313 408 9563.
+Domiciliosw.com`
+        );
+
+        // 4) Marcar la conversación como finalizada
+        conversacion.estado = 'finalizada';
+        conversacion.fecha_fin = new Date();
+        await this.conversacionRepo.save(conversacion);
+
+        // 5) Limpiar estados y timers
+        estadoUsuarios.delete(cliente);
+        estadoUsuarios.delete(domi);
+
+        if (temporizadoresInactividad.has(cliente)) {
+          clearTimeout(temporizadoresInactividad.get(cliente)!);
+          temporizadoresInactividad.delete(cliente);
+        }
+        if (temporizadoresInactividad.has(domi)) {
+          clearTimeout(temporizadoresInactividad.get(domi)!);
+          temporizadoresInactividad.delete(domi);
+        }
+
+        return;
+      }
+      // dentro de: if (mensaje?.interactive?.type === 'button_reply') { ... }
+      if (id === 'fin_domi') {
+        // 1) Obtener conversación activa desde el emisor del botón
+        const st = estadoUsuarios.get(numero);
+        const conversacionId = st?.conversacionId;
+        if (!conversacionId) {
+          await this.enviarMensajeTexto(numero, '⚠️ No encontré una conversación activa para finalizar.');
+          return;
+        }
+
+        const conversacion = await this.conversacionRepo.findOne({ where: { id: conversacionId } });
+        if (!conversacion) {
+          await this.enviarMensajeTexto(numero, '⚠️ No se encontró la conversación en el sistema.');
+          return;
+        }
+
+        const cliente = conversacion.numero_cliente;
+        const domi = conversacion.numero_domiciliario;
+
+        // 2) (Opcional pero recomendable) Solo el DOMICILIARIO puede finalizar
+        if (numero !== domi) {
+          await this.enviarMensajeTexto(numero, '⛔ Solo el domiciliario puede finalizar este pedido.');
+          return;
+        }
+
+        // 3) Mensajes de cierre
+        //    3.1) Al DOMICILIARIO: texto + BOTONES para fijar disponibilidad
+        await this.enviarMensajeTexto(
+          domi,
+          `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+Gracias por tu entrega y compromiso 👏
+
+👉 *Ahora elige tu estado:*`
+        );
+
+        try {
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: domi,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: 'Cambia tu disponibilidad:' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  // (Opcional) { type: 'reply', reply: { id: 'mantener_estado', title: '↩️ Mantener' } },
+                ],
+              },
+            },
+          });
+        } catch (e) {
+          this.logger.warn(
+            `⚠️ Falló envío de botones de estado a ${domi}: ` +
+            (e?.response?.data?.error?.message || e?.message || e)
+          );
+        }
+
+        //    3.2) Al CLIENTE: gracias y cierre
+        await this.enviarMensajeTexto(
+          cliente,
+          `✅ ¡Gracias por confiar en nosotros!
+Tu pedido ha sido finalizado con éxito.
+
+📲 Para mayor seguridad y confianza en todos nuestros servicios, recuerda escribir siempre al 313 408 9563.
+Domiciliosw.com`
+        );
+
+        // 4) Marcar la conversación como finalizada
+        conversacion.estado = 'finalizada';
+        conversacion.fecha_fin = new Date();
+        await this.conversacionRepo.save(conversacion);
+
+        // 5) Limpiar estados y timers
+        estadoUsuarios.delete(cliente);
+        estadoUsuarios.delete(domi);
+
+        if (temporizadoresInactividad.has(cliente)) {
+          clearTimeout(temporizadoresInactividad.get(cliente)!);
+          temporizadoresInactividad.delete(cliente);
+        }
+        if (temporizadoresInactividad.has(domi)) {
+          clearTimeout(temporizadoresInactividad.get(domi)!);
+          temporizadoresInactividad.delete(domi);
+        }
+
+        return;
+      }
+
+
+
+
+      if (id === 'mantener_estado') {
+        const s = estadoUsuarios.get(numero) || {};
+        s.awaitingEstado = false;
+        s.awaitingEstadoExpiresAt = undefined; // NEW
+        estadoUsuarios.set(numero, s);
+
+        if (temporizadoresEstado.has(numero)) { // NEW
+          clearTimeout(temporizadoresEstado.get(numero)!);
+          temporizadoresEstado.delete(numero);
+        }
+
+        await this.enviarMensajeTexto(
+          numero,
+          '👌 Mantendremos tu estado *sin cambios* y conservas tu turno.'
+        );
+        return;
+      }
+
+      if (id === 'cambiar_a_disponible' || id === 'cambiar_a_no_disponible') {
+        const disponible = id === 'cambiar_a_disponible';
+        try {
           await this.domiciliarioService.cambiarDisponibilidadPorTelefono(numero, disponible);
+
+          const s = estadoUsuarios.get(numero) || {};
+          s.awaitingEstado = false;
+          s.awaitingEstadoExpiresAt = undefined; // NEW
+          estadoUsuarios.set(numero, s);
+
+          if (temporizadoresEstado.has(numero)) { // NEW
+            clearTimeout(temporizadoresEstado.get(numero)!);
+            temporizadoresEstado.delete(numero);
+          }
 
           await this.enviarMensajeTexto(
             numero,
             `✅ Estado actualizado. Ahora estás como *${disponible ? 'DISPONIBLE' : 'NO DISPONIBLE'}*.`
           );
+          await this.enviarMensajeTexto(numero, '👋 Escribeme si necesitas consultar o actualizar tu estado.');
         } catch (error) {
-          this.logger.warn(`⚠️ Error al cambiar disponibilidad: ${error.message}`);
-          await this.enviarMensajeTexto(numero, '❌ No se encontró tu perfil como domiciliario.');
+          this.logger.warn(`⚠️ Error al cambiar disponibilidad: ${error?.message || error}`);
+
+          // Libera para permitir reintentar
+          const s = estadoUsuarios.get(numero) || {};
+          s.awaitingEstado = false;
+          s.awaitingEstadoExpiresAt = undefined; // NEW
+          estadoUsuarios.set(numero, s);
+
+          if (temporizadoresEstado.has(numero)) {
+            clearTimeout(temporizadoresEstado.get(numero)!);
+            temporizadoresEstado.delete(numero);
+          }
+
+          await this.enviarMensajeTexto(numero, '❌ No se pudo actualizar tu estado.');
         }
-
-        // 🧹 Finaliza conversación y limpia estado
-        estadoUsuarios.delete(numero);
-
-        if (temporizadoresInactividad.has(numero)) {
-          clearTimeout(temporizadoresInactividad.get(numero));
-          temporizadoresInactividad.delete(numero);
-        }
-
-        await this.enviarMensajeTexto(
-          numero,
-          '👋 Gracias por actualizar tu estado. Puedes escribir *hola* si necesitas algo más.'
-        );
-
         return;
       }
+
 
       // ✅ Confirmaciones de pedido
       // ✅ Confirmaciones de pedido
@@ -637,6 +984,7 @@ Gracias por tu entrega y compromiso 👏
             `✅ Ya estás conectado con el cliente en este chat. ¡Respóndele aquí!`
           );
 
+await this.enviarBotonFinalizarAlDomi(telefonoDomiciliario);
 
 
 
@@ -668,7 +1016,7 @@ Gracias por tu entrega y compromiso 👏
           // 🔐 Mensaje final SOLO si hay conversacion activa
           await this.enviarMensajeTexto(
             numero,
-            `🚴‍♂️ ¡*TU DOMICILIARIO* ya está en línea contigo!
+            `🚴‍♂️ ¡ *TU DOMICILIARIO* ya está en línea contigo!
 📲 Escríbele si necesitas algo extra.
 
 ⚠️ Cada que desees un servicio, por seguridad, mantén siempre contacto con la empresa 📞 *3134089563*`
@@ -1498,6 +1846,8 @@ Gracias por tu entrega y compromiso 👏
         `📞 WhatsApp: ${telClienteNorm}\n\n` +
         `✅ Ya estás conectado con el cliente. Responde aquí mismo.`
       );
+      await this.enviarBotonFinalizarAlDomi(telDomiNorm!);
+
 
       // No mostramos menú porque ya hay conversación activa
       return;
@@ -1643,6 +1993,8 @@ Gracias por tu entrega y compromiso 👏
         `✅ Ya estás conectado con el cliente.`
       );
 
+      await this.enviarBotonFinalizarAlDomi(telDomiNorm!);
+
       return; // no mostrar menú, ya hay conversación
     }
 
@@ -1671,6 +2023,59 @@ Gracias por tu entrega y compromiso 👏
     st.esperandoAsignacion = true;
     estadoUsuarios.set(telClienteNorm, st);
   }
+
+
+  // Normaliza: quita espacios extra, pasa a minúsculas y elimina acentos
+  private normalizarBasico(s: string): string {
+    return (s || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // quita acentos
+      .replace(/\s+/g, ' ');            // colapsa espacios
+  }
+
+  // Devuelve true solo si el texto es EXACTAMENTE uno de los comandos
+  private esComandoReinicioSolo(raw: string): boolean {
+    const t = this.normalizarBasico(raw);
+    // OJO: si quieres aceptar "hola!" o "hola." como reinicio, cambia aquí por .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu,'')
+    const comandos = new Set([
+      'hola',
+      'menu',
+      'inicio',
+      'empezar',
+      'buenas',
+      'buenos dias',
+      'buenas tardes',
+      'buenas noches',
+    ]);
+    return comandos.has(t);
+  }
+
+
+  private async enviarBotonFinalizarAlDomi(to: string) {
+  try {
+    await axiosWhatsapp.post('/messages', {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: '¿Deseas finalizar el pedido?' },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: 'fin_domi', title: '✅ Finalizar' } },
+          ],
+        },
+      },
+    });
+  } catch (e) {
+    this.logger.warn(
+      `⚠️ Falló envío de botón fin_domi a ${to}: ` +
+      (e?.response?.data?.error?.message || e?.message || e)
+    );
+  }
+}
 
 
 }

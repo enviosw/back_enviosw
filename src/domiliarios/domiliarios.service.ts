@@ -4,6 +4,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Domiciliario } from './entities/domiliario.entity';
 
+type ResumenDomiciliario = {
+  nombre: string;
+  disponible: boolean;
+  turno: number; // alias de turno_orden
+};
+
+
 @Injectable()
 export class DomiciliariosService {
   constructor(
@@ -186,6 +193,31 @@ export class DomiciliariosService {
     where: { estado: true, disponible: true },
     order: { turno_orden: 'ASC', id: 'ASC' },
   });
+}
+
+
+  // domiciliarios.service.ts
+async getEstadoPorTelefono(telefono: string): Promise<{ nombre: string; disponible: boolean; turno: number }> {
+  const row = await this.domiciliarioRepo
+    .createQueryBuilder('d')
+    .select([
+      'd.nombre AS nombre',
+      'd.disponible AS disponible',
+      'd.turno_orden AS turno',
+    ])
+    .where('d.telefono_whatsapp = :tel', { tel: telefono })
+    .getRawOne<{ nombre: string; disponible: any; turno: any }>();
+
+    console.log(row)
+  if (!row) {
+    throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
+  }
+
+  return {
+    nombre: row.nombre,
+    disponible: Boolean(row.disponible),
+    turno: Number(row.turno),
+  };
 }
 
 
