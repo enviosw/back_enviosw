@@ -148,13 +148,44 @@ export class DomiciliariosService {
 
 
   async listarResumen(): Promise<{ id: number; nombre: string; telefono_whatsapp: string }[]> {
-  const domiciliarios = await this.domiciliarioRepo
-    .createQueryBuilder('d')
-    .select(['d.id AS id', 'd.nombre AS nombre', 'd.telefono_whatsapp AS telefono_whatsapp'])
-    .orderBy('d.turno_orden', 'ASC')
-    .getRawMany();
+    const domiciliarios = await this.domiciliarioRepo
+      .createQueryBuilder('d')
+      .select(['d.id AS id', 'd.nombre AS nombre', 'd.telefono_whatsapp AS telefono_whatsapp'])
+      .orderBy('d.turno_orden', 'ASC')
+      .getRawMany();
 
-  return domiciliarios;
+    return domiciliarios;
+  }
+
+
+  // 🚦 Listar por orden de disponibilidad (disponibles primero)
+  async listarPorDisponibilidad(): Promise<Domiciliario[]> {
+    return this.domiciliarioRepo
+      .createQueryBuilder('d')
+      .where('d.estado = true')
+      .orderBy('d.disponible', 'DESC')   // true primero
+      .addOrderBy('d.turno_orden', 'ASC')
+      .addOrderBy('d.id', 'ASC')
+      .getMany();
+  }
+
+  // 🔄 Reiniciar turnos a 0 y dejar no disponibles (solo activos)
+  async reiniciarTurnosACeroYNoDisponibles(): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      await manager
+        .createQueryBuilder()
+        .update(Domiciliario)
+        .set({ turno_orden: 0, disponible: false })
+        .where('estado = :estado', { estado: true })
+        .execute();
+    });
+  }
+
+  async verSiguienteDisponible(): Promise<Domiciliario | null> {
+  return this.domiciliarioRepo.findOne({
+    where: { estado: true, disponible: true },
+    order: { turno_orden: 'ASC', id: 'ASC' },
+  });
 }
 
 

@@ -54,7 +54,28 @@ export class DomiciliariosController {
   @Get('resumen')
   getResumen() {
     return this.domiciliariosService.listarResumen();
+
   }
+
+  // 🔎 Listar por orden de disponibilidad
+  @Get('orden/disponibilidad')
+  async listarPorDisponibilidad(): Promise<Domiciliario[]> {
+    return this.domiciliariosService.listarPorDisponibilidad();
+  }
+
+  @Get('siguiente')
+  async siguiente() {
+    return this.domiciliariosService.verSiguienteDisponible();
+  }
+
+
+  // ♻️ Reiniciar turnos a 0 y dejar no disponibles
+  @Post('reiniciar-a-cero')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async reiniciarACero(): Promise<void> {
+    await this.domiciliariosService.reiniciarTurnosACeroYNoDisponibles();
+  }
+
 
   // ✏️ Actualizar domiciliario existente
   @Put(':id')
