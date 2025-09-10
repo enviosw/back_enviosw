@@ -1201,7 +1201,7 @@ Domiciliosw.com`
 📲 Pide tu servicio ingresando a nuestra página web:
 🌐 https://domiciliosw.com/`;
 
-      const urlImagen = `${urlImagenConstants.urlImg}/public/hello.jpeg`;
+      const urlImagen = `${urlImagenConstants.urlImg}/hello.jpeg`;
 
       await this.enviarMensajeImagenPorLink(numero, urlImagen, saludo);
 
