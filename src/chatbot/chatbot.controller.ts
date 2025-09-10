@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Query, Logger, Param } from '@nestjs/common';
 import { ChatbotService } from './chatbot.service';
 import { ConfigService } from '@nestjs/config';
-import { whatsappConstants } from 'src/auth/constants/jwt.constant';
+import { whatsappConstants } from '../auth/constants/jwt.constant';
 import { ChatService } from './chat.service';
 import { Mensaje } from './entities/mensajes.entity';
 

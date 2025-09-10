@@ -1,15 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ComerciosService } from 'src/comercios/comercios.service';
-import { axiosWhatsapp } from 'src/common/axios-whatsapp.instance';
-import { DomiciliosService } from 'src/domicilios/domicilios.service';
+import { ComerciosService } from '../comercios/comercios.service';
+import { axiosWhatsapp } from '../common/axios-whatsapp.instance';
+import { DomiciliosService } from '../domicilios/domicilios.service';
 import { DomiciliariosService } from 'src/domiliarios/domiliarios.service';
-import { Domiciliario } from 'src/domiliarios/entities/domiliario.entity';
+import { Domiciliario } from '../domiliarios/entities/domiliario.entity';
 import { Conversacion } from './entities/conversacion.entity';
 import { Repository } from 'typeorm';
 import { Mensaje } from './entities/mensajes.entity';
 import { Cron } from '@nestjs/schedule';
-import { stickerConstants, urlImagenConstants } from 'src/auth/constants/jwt.constant';
+import { stickerConstants, urlImagenConstants } from '../auth/constants/jwt.constant';
 
 
 const estadoUsuarios = new Map<string, any>();
