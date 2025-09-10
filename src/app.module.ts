@@ -26,18 +26,18 @@ import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
       isGlobal: true,
     }),
 
+       // 👉 Pasa múltiples opciones como argumentos separados, no como array
     ServeStaticModule.forRoot(
       {
-        rootPath: join(__dirname, '..', '..', 'uploads'),
-        serveRoot: 'api/uploads',
+        rootPath: join(process.cwd(), 'uploads'),
+        serveRoot: '/api/uploads',
       },
       {
-        rootPath: join(__dirname, '..', '..', 'public'),
-        serveRoot: 'api/public',
+        rootPath: join(process.cwd(), 'public'),
+        serveRoot: '/api/public',
         serveStaticOptions: { maxAge: '1d' },
       },
     ),
-
 
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
@@ -83,7 +83,7 @@ import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
     DomiciliosModule,
 
     ShortlinksModule,
-
+    
     ComerciosQrModule,
   ],
 })
