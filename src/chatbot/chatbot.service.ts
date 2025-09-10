@@ -502,17 +502,19 @@ if (st?.soporteActivo) return; // ⛔ no cerrar chats PSQR por inactividad
 // Nota: este bloque va ANTES del "if (estado?.conversacionId) {...}" de domiciliarios.
 const st = estadoUsuarios.get(numero);
 
+
+
 if (st?.soporteActivo && st?.soporteConversacionId) {
   const textoPlano = (texto || '').trim();
 
-  // 1) Si quien escribe es el ASESOR y manda "salir", cerramos el caso
-  if (numero === ASESOR_PSQR && /^salir$/i.test(textoPlano)) {
-    await this.finalizarSoportePSQR(ASESOR_PSQR);
+  // ✅ Permitir que CUALQUIERA (asesor o cliente) cierre con "salir"
+  if (tipo === 'text' && /^salir$/i.test(textoPlano)) {
+    await this.finalizarSoportePSQRPorCualquiera(numero);
     return;
   }
 
   // 2) Determinar el otro participante
-  const esAsesor = numero === ASESOR_PSQR;
+  const esAsesor = !!st.soporteCliente; // si en mi estado existe soporteCliente => soy asesor
   const otro = esAsesor ? st.soporteCliente : st.soporteAsesor;
 
   // 3) Reenviar el mensaje con un pequeño prefijo de burbuja
@@ -522,9 +524,9 @@ if (st?.soporteActivo && st?.soporteConversacionId) {
   }
 
   // 4) No cierres por inactividad mientras soporteActivo sea true
-  // (Si usas reinicio por inactividad, ya estás protegido si verificas soporteActivo)
   return;
 }
+
 
 
     if (estado?.conversacionId) {
@@ -2226,12 +2228,22 @@ private async iniciarSoportePSQR(numeroCliente: string, nombreCliente?: string) 
   estadoUsuarios.set(ASESOR_PSQR, stAsesor);
 }
 
-// 🧹 Finaliza el puente PSQR cuando el asesor escribe "salir"
-private async finalizarSoportePSQR(numeroAsesor: string) {
-  const stAsesor = estadoUsuarios.get(numeroAsesor);
-  const cliente = stAsesor?.soporteCliente;
-  const convId = stAsesor?.soporteConversacionId;
-  if (!cliente || !convId) return;
+// 🧹 Finaliza el puente PSQR sin importar quién envía "salir"
+private async finalizarSoportePSQRPorCualquiera(quienEscribe: string) {
+  const st = estadoUsuarios.get(quienEscribe);
+  const convId = st?.soporteConversacionId;
+
+  // Detectar roles y contrapartes a partir del estado en memoria
+  let cliente = st?.soporteCliente ? st.soporteCliente : (st?.soporteAsesor ? quienEscribe : null);
+  let asesor  = st?.soporteAsesor  ? st.soporteAsesor  : (st?.soporteCliente ? quienEscribe : null);
+
+  // Fallback por si el asesor es el fijo ASESOR_PSQR
+  if (!asesor && st?.soporteConversacionId) asesor = ASESOR_PSQR;
+
+  if (!convId || !cliente || !asesor) {
+    // Nada que cerrar
+    return;
+  }
 
   // 1) Mensaje de gracias al cliente
   const gracias = [
@@ -2243,7 +2255,7 @@ private async finalizarSoportePSQR(numeroAsesor: string) {
   await this.enviarMensajeTexto(cliente, gracias);
 
   // 2) Aviso al asesor
-  await this.enviarMensajeTexto(numeroAsesor, '✅ Caso cerrado. ¡Gracias!');
+  await this.enviarMensajeTexto(asesor, '✅ Caso cerrado. ¡Gracias!');
 
   // 3) Limpia estados (y timers si aplica)
   const stCliente = estadoUsuarios.get(cliente) || {};
@@ -2252,14 +2264,11 @@ private async finalizarSoportePSQR(numeroAsesor: string) {
   delete stCliente.soporteAsesor;
   estadoUsuarios.set(cliente, stCliente);
 
+  const stAsesor = estadoUsuarios.get(asesor) || {};
   delete stAsesor.soporteActivo;
   delete stAsesor.soporteConversacionId;
   delete stAsesor.soporteCliente;
-  estadoUsuarios.set(numeroAsesor, stAsesor);
-
-  // 4) (Opcional) si quieres ELIMINAR un registro de conversación en BD: 
-  //    Aquí usamos un ID lógico, así que no hay registro real; 
-  //    si decides persistir, borra aquí con conversacionRepo.delete(idReal).
+  estadoUsuarios.set(asesor, stAsesor);
 }
 
 
