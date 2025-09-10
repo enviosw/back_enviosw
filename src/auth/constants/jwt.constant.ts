@@ -21,3 +21,8 @@ export const stickerConstants = {
   stickerId: process.env.ID_STICKER,
   stickerChad: process.env.SHAD_STICKER,
 };
+
+
+export const urlImagenConstants = {
+  urlImg: process.env.BASE_URL_BACK
+};

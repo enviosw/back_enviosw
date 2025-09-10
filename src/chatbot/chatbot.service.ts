@@ -9,7 +9,7 @@ import { Conversacion } from './entities/conversacion.entity';
 import { Repository } from 'typeorm';
 import { Mensaje } from './entities/mensajes.entity';
 import { Cron } from '@nestjs/schedule';
-import { stickerConstants } from 'src/auth/constants/jwt.constant';
+import { stickerConstants, urlImagenConstants } from 'src/auth/constants/jwt.constant';
 
 
 const estadoUsuarios = new Map<string, any>();
@@ -506,28 +506,28 @@ export class ChatbotService {
       });
 
 
-            const entrada = texto
-              ?.trim()
-              .toLowerCase()
-              .normalize('NFD') // separa acentos
-              .replace(/[\u0300-\u036f]/g, ''); // elimina acentos
+      const entrada = texto
+        ?.trim()
+        .toLowerCase()
+        .normalize('NFD') // separa acentos
+        .replace(/[\u0300-\u036f]/g, ''); // elimina acentos
 
 
-            // 🔚 Si escriben "fin", finalizar conversación
-            const finales = ['fin_domi', 'fin-domi', 'Fin_domi', 'Fin-domi', 'fin domi'];
+      // 🔚 Si escriben "fin", finalizar conversación
+      const finales = ['fin_domi', 'fin-domi', 'Fin_domi', 'Fin-domi', 'fin domi'];
 
-            if (entrada && finales.some(p => entrada.startsWith(p))) {
-      //         await this.enviarMensajeTexto(
-      //           numero,
-      //           `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
-      // Gracias por tu entrega y compromiso 👏
+      if (entrada && finales.some(p => entrada.startsWith(p))) {
+        //         await this.enviarMensajeTexto(
+        //           numero,
+        //           `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+        // Gracias por tu entrega y compromiso 👏
 
-      // 👉 *Ahora elige tu estado:*
-      // ✅ Disponible
-      // 🛑 No disponible`
-      //         );
+        // 👉 *Ahora elige tu estado:*
+        // ✅ Disponible
+        // 🛑 No disponible`
+        //         );
 
-                      await this.enviarMensajeTexto(
+        await this.enviarMensajeTexto(
           numero,
           `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
 Gracias por tu entrega y compromiso 👏
@@ -536,7 +536,7 @@ Gracias por tu entrega y compromiso 👏
         );
 
 
-                try {
+        try {
           await axiosWhatsapp.post('/messages', {
             messaging_product: 'whatsapp',
             to: numero,
@@ -561,27 +561,27 @@ Gracias por tu entrega y compromiso 👏
         }
 
 
-              await this.enviarMensajeTexto(
-                receptor,
-                `✅ ¡Gracias por confiar en nosotros!
+        await this.enviarMensajeTexto(
+          receptor,
+          `✅ ¡Gracias por confiar en nosotros!
 Tu pedido ha sido finalizado con éxito.
 
 📲 Para mayor seguridad y confianza en todos nuestros servicios, recuerda escribir siempre al 313 408 9563.
 Domiciliosw.com`
-              );
+        );
 
 
-              conversacion.estado = 'finalizada';
-              conversacion.fecha_fin = new Date();
-              await this.conversacionRepo.save(conversacion);
+        conversacion.estado = 'finalizada';
+        conversacion.fecha_fin = new Date();
+        await this.conversacionRepo.save(conversacion);
 
-              estadoUsuarios.delete(numero);
-              estadoUsuarios.delete(receptor);
-              temporizadoresInactividad.delete(numero);
-              temporizadoresInactividad.delete(receptor);
+        estadoUsuarios.delete(numero);
+        estadoUsuarios.delete(receptor);
+        temporizadoresInactividad.delete(numero);
+        temporizadoresInactividad.delete(receptor);
 
-              return;
-            }
+        return;
+      }
 
       // Reenviar el mensaje al otro participante
       // Reenviar el mensaje al otro participante
@@ -616,25 +616,35 @@ Domiciliosw.com`
     // const textoLimpio = (texto || '').trim().toLowerCase();
 
 
-estado.ultimoMensaje = Date.now();
-this.programarInactividad(numero);
+    estado.ultimoMensaje = Date.now();
+    this.programarInactividad(numero);
 
-// ✅ Reiniciar solo si el mensaje es EXACTAMENTE el comando (no frases)
-if (tipo === 'text' && this.esComandoReinicioSolo(texto)) {
-  estadoUsuarios.delete(numero);
-  if (estado?.conversacionId) {
-    await this.conversacionRepo.update(estado.conversacionId, { fecha_fin: new Date(), estado: 'finalizada' });
-  }
-  await this.enviarMensajeTexto(
-    numero,
-    `👋 Hola *${String(nombre)}*, soy *Wilber*, tu asistente virtual de *DOMICILIOS W*
+    // ✅ Reiniciar solo si el mensaje es EXACTAMENTE el comando (no frases)
+    // ✅ Reiniciar solo si el mensaje es EXACTAMENTE el comando (no frases)
+    if (tipo === 'text' && this.esComandoReinicioSolo(texto)) {
+      estadoUsuarios.delete(numero);
+
+      if (estado?.conversacionId) {
+        await this.conversacionRepo.update(estado.conversacionId, { fecha_fin: new Date(), estado: 'finalizada' });
+      }
+
+      // 🚀 Envía la imagen de saludo primero
+      const urlImagen = `${urlImagenConstants.urlImg}/public/hello.jpeg`;
+      const saludo = `👋 Hola *${String(nombre)}*, soy *Wilber*, tu asistente virtual de *DOMICILIOS W*
 
 🛵💨 Pide tu servicio ingresando a nuestra *página web*:
-🌐 https://domiciliosw.com`
-  );
-  await this.enviarListaOpciones(numero);
-  return;
-}
+🌐 https://domiciliosw.com`;
+
+      await this.enviarMensajeImagenPorLink(numero, urlImagen, saludo);
+
+      // ⏱️ Pequeña pausa para que no se empalmen los mensajes
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // 🚀 Lista de opciones
+      await this.enviarListaOpciones(numero);
+
+      return;
+    }
 
 
     if (tipo === 'sticker') {
@@ -984,7 +994,7 @@ Domiciliosw.com`
             `✅ Ya estás conectado con el cliente en este chat. ¡Respóndele aquí!`
           );
 
-await this.enviarBotonFinalizarAlDomi(telefonoDomiciliario);
+          await this.enviarBotonFinalizarAlDomi(telefonoDomiciliario);
 
 
 
@@ -1176,20 +1186,31 @@ await this.enviarBotonFinalizarAlDomi(telefonoDomiciliario);
     const enConversacion = Boolean(estado?.conversacionId);
     const menuBloqueado = bloqueoMenu.has(numero);
 
+    // helper reutilizable
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+    // ... dentro de tu bloque:
     if (
       tipo === 'text' &&
       !estado?.inicioMostrado &&
       !this.estaEnCualquierFlujo(numero) && // ⛔ NO mostrar menú si está en flujo
       !menuBloqueado
     ) {
-      await this.enviarMensajeTexto(
-        numero,
-        `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
+      const saludo = `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
 
 📲 Pide tu servicio ingresando a nuestra página web:
-🌐 https://domiciliosw.com/`
-      );
+🌐 https://domiciliosw.com/`;
+
+      const urlImagen = `${urlImagenConstants.urlImg}/public/hello.jpeg`;
+
+      await this.enviarMensajeImagenPorLink(numero, urlImagen, saludo);
+
+      // ⏱️ pausa de 300 ms (usa 3000 si quieres ~3 segundos)
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+
       await this.enviarListaOpciones(numero);
+
       estado.inicioMostrado = true;
       estadoUsuarios.set(numero, estado);
       return;
@@ -2054,28 +2075,50 @@ await this.enviarBotonFinalizarAlDomi(telefonoDomiciliario);
 
 
   private async enviarBotonFinalizarAlDomi(to: string) {
-  try {
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: '¿Deseas finalizar el pedido?' },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: 'fin_domi', title: '✅ Finalizar' } },
-          ],
+    try {
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: '¿Deseas finalizar el pedido?' },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'fin_domi', title: '✅ Finalizar' } },
+            ],
+          },
         },
-      },
-    });
-  } catch (e) {
-    this.logger.warn(
-      `⚠️ Falló envío de botón fin_domi a ${to}: ` +
-      (e?.response?.data?.error?.message || e?.message || e)
-    );
+      });
+    } catch (e) {
+      this.logger.warn(
+        `⚠️ Falló envío de botón fin_domi a ${to}: ` +
+        (e?.response?.data?.error?.message || e?.message || e)
+      );
+    }
   }
-}
+
+
+  private async enviarMensajeImagenPorLink(
+    numero: string,
+    urlImagenPublica: string,
+    caption: string
+  ): Promise<void> {
+    try {
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: numero,
+        type: 'image',
+        image: { link: urlImagenPublica, caption },
+      });
+      this.logger.log(`✅ Imagen enviada a ${numero}`);
+    } catch (error) {
+      this.logger.error('❌ Error al enviar imagen:', error.response?.data || error.message);
+      // fallback para no perder el saludo
+      await this.enviarMensajeTexto(numero, caption);
+    }
+  }
+
 
 
 }
