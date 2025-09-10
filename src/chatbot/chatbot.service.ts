@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ComerciosService } from '../comercios/comercios.service';
 import { axiosWhatsapp } from '../common/axios-whatsapp.instance';
 import { DomiciliosService } from '../domicilios/domicilios.service';
-import { DomiciliariosService } from 'src/domiliarios/domiliarios.service';
+import { DomiciliariosService } from '../domiliarios/domiliarios.service';
 import { Domiciliario } from '../domiliarios/entities/domiliario.entity';
 import { Conversacion } from './entities/conversacion.entity';
 import { Repository } from 'typeorm';
