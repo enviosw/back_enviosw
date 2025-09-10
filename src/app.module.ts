@@ -29,11 +29,11 @@ import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
     ServeStaticModule.forRoot(
       {
         rootPath: join(__dirname, '..', '..', 'uploads'),
-        serveRoot: '/uploads',
+        serveRoot: 'api/uploads',
       },
       {
         rootPath: join(__dirname, '..', '..', 'public'),
-        serveRoot: '/public',
+        serveRoot: 'api/public',
         serveStaticOptions: { maxAge: '1d' },
       },
     ),
