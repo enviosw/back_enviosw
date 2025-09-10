@@ -2197,6 +2197,8 @@ private async iniciarSoportePSQR(numeroCliente: string, nombreCliente?: string) 
     `📞 ${ASESOR_PSQR}`,
     '',
     '✍️ Escribe tu caso aquí. Te responderemos en este mismo chat.',
+    '❌ Escribe *salir* para terminar la conversación.'
+
   ].join('\n');
 
   await this.enviarMensajeTexto(numeroCliente, msgCliente);
