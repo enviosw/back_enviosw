@@ -26,7 +26,11 @@ function isExpired(ts?: number) {
 
 const ASESOR_PSQR = '573208729276';
 
-
+const TRIGGER_PALABRA_CLAVE = '01';
+// 👉 Si mañana agregas más stickers, solo pon sus SHA aquí:
+const STICKERS_RAPIDOS = new Set<string>([
+  String(stickerConstants.stickerChad), // sticker oficial actual
+]);
 
 
 @Injectable()
@@ -54,7 +58,7 @@ export class ChatbotService {
   // No aplica si hay conversación activa o si el pedido está confirmado / esperando asignación
   private async reiniciarPorInactividad(numero: string) {
     const st = estadoUsuarios.get(numero) || {};
-if (st?.soporteActivo) return; // ⛔ no cerrar chats PSQR por inactividad
+    if (st?.soporteActivo) return; // ⛔ no cerrar chats PSQR por inactividad
 
     if (st?.conversacionId) return;          // ya en chat con domiciliario
     if (st?.confirmadoPedido === true) return;     // ya confirmó
@@ -488,6 +492,37 @@ if (st?.soporteActivo) return; // ⛔ no cerrar chats PSQR por inactividad
       return; // ⛔ ya gestionado
     }
 
+    // ⚡ Palabra clave "01" ⇒ mismo comportamiento que sticker oficial (pedido rápido comercio)
+    if (tipo === 'text' && this.esTriggerRapidoPorTexto(texto)) {
+      try {
+        const numeroLimpio = numero.startsWith('57') ? numero.slice(2) : numero;
+        const comercio = await this.comerciosService.findByTelefono(numeroLimpio);
+
+        if (!comercio) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No pude identificar tu comercio para crear el pedido rápido.\n' +
+            'Si eres un comercio aliado, por favor verifica que nos escribes desde tu línea registrada.'
+          );
+          return;
+        }
+
+        await this.enviarMensajeTexto(
+          numero,
+          `⚡ *Pedido rápido activado* (palabra clave: ${TRIGGER_PALABRA_CLAVE}).\nRevisando domiciliarios...`
+        );
+
+        await this.crearPedidoDesdeSticker(numero, comercio, comercio.nombre);
+      } catch (err: any) {
+        this.logger.error(`❌ Error en trigger por texto "${TRIGGER_PALABRA_CLAVE}": ${err?.message || err}`);
+        await this.enviarMensajeTexto(
+          numero,
+          '❌ Ocurrió un problema creando tu pedido rápido. Intenta nuevamente.'
+        );
+      }
+      return;
+    }
+
 
     // 🧠 Obtener o inicializar estado del usuario
     let estado = estadoUsuarios.get(numero);
@@ -497,35 +532,35 @@ if (st?.soporteActivo) return; // ⛔ no cerrar chats PSQR por inactividad
       estadoUsuarios.set(numero, estado);
     }
 
-    
+
     // 🔀 PUENTE PSQR: reenvía mensajes entre cliente y asesor
-// Nota: este bloque va ANTES del "if (estado?.conversacionId) {...}" de domiciliarios.
-const st = estadoUsuarios.get(numero);
+    // Nota: este bloque va ANTES del "if (estado?.conversacionId) {...}" de domiciliarios.
+    const st = estadoUsuarios.get(numero);
 
 
 
-if (st?.soporteActivo && st?.soporteConversacionId) {
-  const textoPlano = (texto || '').trim();
+    if (st?.soporteActivo && st?.soporteConversacionId) {
+      const textoPlano = (texto || '').trim();
 
-  // ✅ Permitir que CUALQUIERA (asesor o cliente) cierre con "salir"
-  if (tipo === 'text' && /^salir$/i.test(textoPlano)) {
-    await this.finalizarSoportePSQRPorCualquiera(numero);
-    return;
-  }
+      // ✅ Permitir que CUALQUIERA (asesor o cliente) cierre con "salir"
+      if (tipo === 'text' && /^salir$/i.test(textoPlano)) {
+        await this.finalizarSoportePSQRPorCualquiera(numero);
+        return;
+      }
 
-  // 2) Determinar el otro participante
-  const esAsesor = !!st.soporteCliente; // si en mi estado existe soporteCliente => soy asesor
-  const otro = esAsesor ? st.soporteCliente : st.soporteAsesor;
+      // 2) Determinar el otro participante
+      const esAsesor = !!st.soporteCliente; // si en mi estado existe soporteCliente => soy asesor
+      const otro = esAsesor ? st.soporteCliente : st.soporteAsesor;
 
-  // 3) Reenviar el mensaje con un pequeño prefijo de burbuja
-  if (tipo === 'text' && texto) {
-    const prefijo = esAsesor ? '👩‍💼' : '🙋‍♀️';
-    await this.enviarMensajeTexto(otro, `${prefijo} ${texto}`);
-  }
+      // 3) Reenviar el mensaje con un pequeño prefijo de burbuja
+      if (tipo === 'text' && texto) {
+        const prefijo = esAsesor ? '👩‍💼' : '🙋‍♀️';
+        await this.enviarMensajeTexto(otro, `${prefijo} ${texto}`);
+      }
 
-  // 4) No cierres por inactividad mientras soporteActivo sea true
-  return;
-}
+      // 4) No cierres por inactividad mientras soporteActivo sea true
+      return;
+    }
 
 
 
@@ -661,33 +696,40 @@ if (st?.soporteActivo && st?.soporteConversacionId) {
 
     if (tipo === 'sticker') {
       const sha = mensaje?.sticker?.sha256;
-      const STICKER_EMPRESA_SHA = String(stickerConstants.stickerChad);
-
       this.logger.log(`📎 SHA del sticker recibido: ${sha}`);
 
-      const numeroLimpio = numero.startsWith('57') ? numero.slice(2) : numero;
-
-      if (sha === STICKER_EMPRESA_SHA) {
+      // ¿Es un sticker de "pedido rápido"?
+      if (this.esStickerRapido(sha)) {
         try {
-          const comercio = await this.comerciosService.findByTelefono(numeroLimpio);
+          // a) Intentamos por número del emisor (comercio escribe desde su línea)
+          const numeroLimpio = numero.startsWith('57') ? numero.slice(2) : numero;
+          let comercio = await this.comerciosService.findByTelefono(numeroLimpio);
 
-          if (comercio) {
-            // ✅ 1) Agradece y confirma detección
-            await this.enviarMensajeTexto(
-              numero,
-              `🎉 *Sticker oficial detectado* de ${comercio.nombre}.\n` +
-              `🧾 Crearé tu pedido y revisaré domiciliario disponible...`
-            );
+          // b) (Opcional) Si el sticker está mapeado a un comercio concreto (cuando no escribe desde la línea del comercio)
+          // if (!comercio && STICKER_TO_COMERCIO_TEL[sha!]) {
+          //   const tel = STICKER_TO_COMERCIO_TEL[sha!].replace(/^57/, '');
+          //   comercio = await this.comerciosService.findByTelefono(tel);
+          // }
 
-            // ✅ 2) Crea pedido e intenta asignar (o lo deja pendiente)
-            await this.crearPedidoDesdeSticker(numero, comercio, comercio.nombre);
-          } else {
-            // Comercio no encontrado, solo mensaje genérico
-            await this.enviarMensajeTexto(numero, '🎉 ¡Gracias por usar nuestro *sticker oficial*!');
-            this.logger.warn(`⚠️ No se encontró comercio para el número: ${numeroLimpio}`);
-          }
-        } catch (error) {
-          this.logger.error(`❌ Error flujo sticker-oficial: ${error?.message || error}`);
+          await this.enviarMensajeTexto(
+            numero,
+            [
+              '🧾 *No encontré tu comercio en nuestro sistema.*',
+              'Si deseas afiliarlo para activar pedidos rápidos,',
+              'escríbenos al 📞 314 242 3130.'
+            ].join('\n')
+          );
+
+
+          await this.enviarMensajeTexto(
+            numero,
+            `🎉 *Sticker oficial detectado* de ${comercio.nombre}.\n` +
+            `🧾 Crearé tu pedido y revisaré domiciliario disponible...`
+          );
+
+          await this.crearPedidoDesdeSticker(numero, comercio, comercio.nombre);
+        } catch (error: any) {
+          this.logger.error(`❌ Error flujo sticker-rápido: ${error?.message || error}`);
           await this.enviarMensajeTexto(
             numero,
             '⚠️ Ocurrió un problema creando tu pedido desde el sticker. Intenta nuevamente.'
@@ -699,6 +741,7 @@ if (st?.soporteActivo && st?.soporteConversacionId) {
 
       return;
     }
+
 
 
 
@@ -2187,92 +2230,102 @@ Gracias por tu entrega y compromiso 👏
 
 
   // ⚙️ Crear/activar puente de soporte con asesor PSQR
-private async iniciarSoportePSQR(numeroCliente: string, nombreCliente?: string) {
-  // 1) Saludo bonito al cliente
-  const msgCliente = [
-    '🛟 *Soporte DomiciliosW (PSQR)*',
-    '✅ Ya un asesor de *DomiciliosW* está en contacto contigo.',
-    '',
-    '👩‍💼 *Asesor asignado:*',
-    `📞 ${ASESOR_PSQR}`,
-    '',
-    '✍️ Escribe tu caso aquí. Te responderemos en este mismo chat.',
-    '❌ Escribe *salir* para terminar la conversación.'
+  private async iniciarSoportePSQR(numeroCliente: string, nombreCliente?: string) {
+    // 1) Saludo bonito al cliente
+    const msgCliente = [
+      '🛟 *Soporte DomiciliosW (PSQR)*',
+      '✅ Ya un asesor de *DomiciliosW* está en contacto contigo.',
+      '',
+      '👩‍💼 *Asesor asignado:*',
+      `📞 ${ASESOR_PSQR}`,
+      '',
+      '✍️ Escribe tu caso aquí. Te responderemos en este mismo chat.',
+      '❌ Escribe *salir* para terminar la conversación.'
 
-  ].join('\n');
+    ].join('\n');
 
-  await this.enviarMensajeTexto(numeroCliente, msgCliente);
+    await this.enviarMensajeTexto(numeroCliente, msgCliente);
 
-  // 2) Aviso al asesor con datos del cliente
-  const msgAsesor = [
-    '🛎️ *NUEVO CONTACTO PSQR*',
-    `👤 Cliente: ${nombreCliente || 'Cliente'}`,
-    `📱 WhatsApp: ${numeroCliente}`,
-    '',
-    '💬 Responde aquí para iniciar el chat.',
-    '🧷 Escribe *salir* cuando cierres el caso.',
-  ].join('\n');
+    // 2) Aviso al asesor con datos del cliente
+    const msgAsesor = [
+      '🛎️ *NUEVO CONTACTO PSQR*',
+      `👤 Cliente: ${nombreCliente || 'Cliente'}`,
+      `📱 WhatsApp: ${numeroCliente}`,
+      '',
+      '💬 Responde aquí para iniciar el chat.',
+      '🧷 Escribe *salir* cuando cierres el caso.',
+    ].join('\n');
 
-  await this.enviarMensajeTexto(ASESOR_PSQR, msgAsesor);
+    await this.enviarMensajeTexto(ASESOR_PSQR, msgAsesor);
 
-  // 3) Registra el "puente" en memoria para rutear mensajes
-  const convId = `psqr-${Date.now()}-${numeroCliente}`; // id lógico para el puente
-  const stCliente = estadoUsuarios.get(numeroCliente) || {};
-  stCliente.soporteActivo = true;
-  stCliente.soporteConversacionId = convId;
-  stCliente.soporteAsesor = ASESOR_PSQR;
-  estadoUsuarios.set(numeroCliente, stCliente);
+    // 3) Registra el "puente" en memoria para rutear mensajes
+    const convId = `psqr-${Date.now()}-${numeroCliente}`; // id lógico para el puente
+    const stCliente = estadoUsuarios.get(numeroCliente) || {};
+    stCliente.soporteActivo = true;
+    stCliente.soporteConversacionId = convId;
+    stCliente.soporteAsesor = ASESOR_PSQR;
+    estadoUsuarios.set(numeroCliente, stCliente);
 
-  const stAsesor = estadoUsuarios.get(ASESOR_PSQR) || {};
-  stAsesor.soporteActivo = true;
-  stAsesor.soporteConversacionId = convId;
-  stAsesor.soporteCliente = numeroCliente;
-  estadoUsuarios.set(ASESOR_PSQR, stAsesor);
-}
-
-// 🧹 Finaliza el puente PSQR sin importar quién envía "salir"
-private async finalizarSoportePSQRPorCualquiera(quienEscribe: string) {
-  const st = estadoUsuarios.get(quienEscribe);
-  const convId = st?.soporteConversacionId;
-
-  // Detectar roles y contrapartes a partir del estado en memoria
-  let cliente = st?.soporteCliente ? st.soporteCliente : (st?.soporteAsesor ? quienEscribe : null);
-  let asesor  = st?.soporteAsesor  ? st.soporteAsesor  : (st?.soporteCliente ? quienEscribe : null);
-
-  // Fallback por si el asesor es el fijo ASESOR_PSQR
-  if (!asesor && st?.soporteConversacionId) asesor = ASESOR_PSQR;
-
-  if (!convId || !cliente || !asesor) {
-    // Nada que cerrar
-    return;
+    const stAsesor = estadoUsuarios.get(ASESOR_PSQR) || {};
+    stAsesor.soporteActivo = true;
+    stAsesor.soporteConversacionId = convId;
+    stAsesor.soporteCliente = numeroCliente;
+    estadoUsuarios.set(ASESOR_PSQR, stAsesor);
   }
 
-  // 1) Mensaje de gracias al cliente
-  const gracias = [
-    '🧡 *Gracias por contactarnos*',
-    'Tu caso de PSQR ha sido *cerrado*.',
-    '',
-    'Si necesitas algo más, escribe *Hola* y con gusto te ayudamos. 🛵',
-  ].join('\n');
-  await this.enviarMensajeTexto(cliente, gracias);
+  // 🧹 Finaliza el puente PSQR sin importar quién envía "salir"
+  private async finalizarSoportePSQRPorCualquiera(quienEscribe: string) {
+    const st = estadoUsuarios.get(quienEscribe);
+    const convId = st?.soporteConversacionId;
 
-  // 2) Aviso al asesor
-  await this.enviarMensajeTexto(asesor, '✅ Caso cerrado. ¡Gracias!');
+    // Detectar roles y contrapartes a partir del estado en memoria
+    let cliente = st?.soporteCliente ? st.soporteCliente : (st?.soporteAsesor ? quienEscribe : null);
+    let asesor = st?.soporteAsesor ? st.soporteAsesor : (st?.soporteCliente ? quienEscribe : null);
 
-  // 3) Limpia estados (y timers si aplica)
-  const stCliente = estadoUsuarios.get(cliente) || {};
-  delete stCliente.soporteActivo;
-  delete stCliente.soporteConversacionId;
-  delete stCliente.soporteAsesor;
-  estadoUsuarios.set(cliente, stCliente);
+    // Fallback por si el asesor es el fijo ASESOR_PSQR
+    if (!asesor && st?.soporteConversacionId) asesor = ASESOR_PSQR;
 
-  const stAsesor = estadoUsuarios.get(asesor) || {};
-  delete stAsesor.soporteActivo;
-  delete stAsesor.soporteConversacionId;
-  delete stAsesor.soporteCliente;
-  estadoUsuarios.set(asesor, stAsesor);
-}
+    if (!convId || !cliente || !asesor) {
+      // Nada que cerrar
+      return;
+    }
 
+    // 1) Mensaje de gracias al cliente
+    const gracias = [
+      '🧡 *Gracias por contactarnos*',
+      'Tu caso de PSQR ha sido *cerrado*.',
+      '',
+      'Si necesitas algo más, escribe *Hola* y con gusto te ayudamos. 🛵',
+    ].join('\n');
+    await this.enviarMensajeTexto(cliente, gracias);
+
+    // 2) Aviso al asesor
+    await this.enviarMensajeTexto(asesor, '✅ Caso cerrado. ¡Gracias!');
+
+    // 3) Limpia estados (y timers si aplica)
+    const stCliente = estadoUsuarios.get(cliente) || {};
+    delete stCliente.soporteActivo;
+    delete stCliente.soporteConversacionId;
+    delete stCliente.soporteAsesor;
+    estadoUsuarios.set(cliente, stCliente);
+
+    const stAsesor = estadoUsuarios.get(asesor) || {};
+    delete stAsesor.soporteActivo;
+    delete stAsesor.soporteConversacionId;
+    delete stAsesor.soporteCliente;
+    estadoUsuarios.set(asesor, stAsesor);
+  }
+
+  private esTriggerRapidoPorTexto(raw?: string): boolean {
+    if (!raw) return false;
+    const t = this.normalizarBasico(raw);
+    return t === TRIGGER_PALABRA_CLAVE;
+  }
+
+  private esStickerRapido(sha?: string): boolean {
+    if (!sha) return false;
+    return STICKERS_RAPIDOS.has(sha);
+  }
 
 }
 
