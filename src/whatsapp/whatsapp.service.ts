@@ -2,7 +2,7 @@
 import { Injectable } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { whatsappConstants } from 'src/auth/constants/jwt.constant';
+import { whatsappConstants } from '../auth/constants/jwt.constant';
 
 @Injectable()
 export class WhatsappService {
