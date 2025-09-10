@@ -629,13 +629,13 @@ Domiciliosw.com`
       }
 
       // 🚀 Envía la imagen de saludo primero
-      const urlImagen = `${urlImagenConstants.urlImg}/public/hello.jpeg`;
+      const urlImagen = `${urlImagenConstants.urlImg}`;
       const saludo = `👋 Hola *${String(nombre)}*, soy *Wilber*, tu asistente virtual de *DOMICILIOS W*
 
 🛵💨 Pide tu servicio ingresando a nuestra *página web*:
 🌐 https://domiciliosw.com`;
 
-      await this.enviarMensajeImagenPorLink(numero, urlImagen, saludo);
+      await this.enviarMensajeImagenPorId(numero, urlImagen, saludo);
 
       // ⏱️ Pequeña pausa para que no se empalmen los mensajes
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -1201,9 +1201,9 @@ Domiciliosw.com`
 📲 Pide tu servicio ingresando a nuestra página web:
 🌐 https://domiciliosw.com/`;
 
-      const urlImagen = `${urlImagenConstants.urlImg}/hello.jpeg`;
+      const urlImagen = `${urlImagenConstants.urlImg}`;
 
-      await this.enviarMensajeImagenPorLink(numero, urlImagen, saludo);
+      await this.enviarMensajeImagenPorId(numero, urlImagen, saludo);
 
       // ⏱️ pausa de 300 ms (usa 3000 si quieres ~3 segundos)
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -2099,25 +2099,25 @@ Domiciliosw.com`
   }
 
 
-  private async enviarMensajeImagenPorLink(
-    numero: string,
-    urlImagenPublica: string,
-    caption: string
-  ): Promise<void> {
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'image',
-        image: { link: urlImagenPublica, caption },
-      });
-      this.logger.log(`✅ Imagen enviada a ${numero}`);
-    } catch (error) {
-      this.logger.error('❌ Error al enviar imagen:', error.response?.data || error.message);
-      // fallback para no perder el saludo
-      await this.enviarMensajeTexto(numero, caption);
-    }
+private async enviarMensajeImagenPorId(
+  numero: string,
+  mediaId: string,
+  caption: string
+): Promise<void> {
+  try {
+    await axiosWhatsapp.post('/messages', {
+      messaging_product: 'whatsapp',
+      to: numero,
+      type: 'image',
+      image: { id: mediaId, caption },
+    });
+    this.logger.log(`✅ Imagen enviada a ${numero}`);
+  } catch (error) {
+    this.logger.error('❌ Error al enviar imagen:', error.response?.data || error.message);
+    // fallback para no perder el saludo
+    await this.enviarMensajeTexto(numero, caption);
   }
+}
 
 
 

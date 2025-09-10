@@ -32,13 +32,6 @@ import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
 
     }),
 
-        ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', '..', 'public'),
-      serveRoot: '/api/',
-
-    }),
-
-
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
