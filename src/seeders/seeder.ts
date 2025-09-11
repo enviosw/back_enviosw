@@ -81,6 +81,25 @@ async function seedServicios(app) {
     { nombre: 'Compras', estado: 'inactivo', icon: 'FaShoppingCart', color: '#FF6900', foto: 'com.png', orden: 2 },
     { nombre: 'Pagos', estado: 'inactivo', icon: 'FaCreditCard', color: '#615FFF', foto: 'pag.png', orden: 4 },
     { nombre: 'Envíos', estado: 'inactivo', icon: 'FaParachuteBox', color: '#00BBA7', foto: 'env.png', orden: 5 },
+
+
+
+  // Nuevos
+  { nombre: 'Belleza', estado: 'activo', icon: 'Sparkles', color: '#FF6F91', foto: 'bel.png', orden: 10 },
+  { nombre: 'Floristería', estado: 'activo', icon: 'Flower2', color: '#FF69B4', foto: 'flo.png', orden: 11 },
+  { nombre: 'Tecnología', estado: 'activo', icon: 'Smartphone', color: '#007BFF', foto: 'tec.png', orden: 12 },
+  { nombre: 'Mascotas', estado: 'activo', icon: 'PawPrint', color: '#FF8C42', foto: 'mas.png', orden: 13 },
+  { nombre: 'Moda', estado: 'activo', icon: 'Shirt', color: '#A52A2A', foto: 'mod.png', orden: 14 },
+  { nombre: 'Panadería', estado: 'activo', icon: 'Croissant', color: '#E3A857', foto: 'pan.png', orden: 15 },
+  { nombre: 'Pastelería', estado: 'activo', icon: 'Cake', color: '#FFB6C1', foto: 'pas.png', orden: 16 },
+  { nombre: 'Sexshop', estado: 'activo', icon: 'Heart', color: '#C71585', foto: 'sex.png', orden: 17 },
+  { nombre: 'Heladería', estado: 'activo', icon: 'IceCreamCone', color: '#87CEFA', foto: 'hel.png', orden: 18 },
+  { nombre: 'Ferretería', estado: 'activo', icon: 'Hammer', color: '#708090', foto: 'fer.png', orden: 19 },
+  { nombre: 'Lavandería', estado: 'activo', icon: 'Shirt', color: '#40E0D0', foto: 'lav.png', orden: 20 },
+  { nombre: 'Congelados', estado: 'activo', icon: 'Snowflake', color: '#00CED1', foto: 'con.png', orden: 21 },
+  { nombre: 'Aseo', estado: 'activo', icon: 'Soap', color: '#32CD32', foto: 'ase.png', orden: 22 },
+  { nombre: 'Salsamentaria', estado: 'activo', icon: 'Drumstick', color: '#CD5C5C', foto: 'sal.png', orden: 23 },
+  { nombre: 'Óptica', estado: 'activo', icon: 'Glasses', color: '#8B008B', foto: 'opt.png', orden: 24 },
   ];
 
   for (const servicio of serviciosData) {
