@@ -748,15 +748,17 @@ export class ChatbotService {
           //   comercio = await this.comerciosService.findByTelefono(tel);
           // }
 
-          await this.enviarMensajeTexto(
-            numero,
-            [
-              '🧾 *No encontré tu comercio en nuestro sistema.*',
-              'Si deseas afiliarlo para activar pedidos rápidos,',
-              'escríbenos al 📞 314 242 3130.'
-            ].join('\n')
-          );
-
+        if (!comercio) {
+      await this.enviarMensajeTexto(
+        numero,
+        [
+          '🧾 *No encontré tu comercio en nuestro sistema.*',
+          'Si deseas afiliarlo para activar pedidos rápidos,',
+          'escríbenos al 📞 314 242 3130.'
+        ].join('\n')
+      );
+      return; // 👈 importante para no seguir con crearPedidoDesdeSticker
+    }
 
           await this.enviarMensajeTexto(
             numero,
@@ -2204,7 +2206,7 @@ export class ChatbotService {
       await this.enviarMensajeTexto(
         telClienteNorm,
         `✅ ¡Pedido creado y asignado!\n\n` +
-        `👤 *${domiciliario.nombre} ${domiciliario.apellido}*\n` +
+        `👤 *${String(domiciliario.nombre)}* *${String(domiciliario.apellido)}*\n` +
         `🧥 Chaqueta: *${domiciliario.numero_chaqueta}*\n` +
         `📞 WhatsApp: *${telDomiNorm}*\n\n` +
         `💬 Ya puedes coordinar con el domiciliario por aquí.`
