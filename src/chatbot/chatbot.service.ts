@@ -2043,7 +2043,7 @@ export class ChatbotService {
         telDomiNorm,
         `📦 *Nuevo pedido` +
         `👤 Comercio: *${String(comercio?.nombre) || String(nombreContacto) || ''}*\n` +
-        `📞 WhatsApp: ${comercio?.direccion ?? ''}\n\n` +
+        `📍 Dirección: ${comercio?.direccion ?? ''}\n\n` +
         `📞 WhatsApp: ${telClienteNorm}\n\n` +
         `✅ Ya estás conectado con el cliente.`
       );
