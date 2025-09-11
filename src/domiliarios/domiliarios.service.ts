@@ -195,6 +195,14 @@ export class DomiciliariosService {
   });
 }
 
+// domiciliarios.service.ts
+async getByTelefono(telefono: string): Promise<Domiciliario | null> {
+  return this.domiciliarioRepo.findOne({
+    where: { telefono_whatsapp: telefono },
+  });
+}
+
+
 
   // domiciliarios.service.ts
 async getEstadoPorTelefono(telefono: string): Promise<{ nombre: string; disponible: boolean; turno: number }> {
