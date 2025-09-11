@@ -515,19 +515,6 @@ export class ChatbotService {
 
 
 
-    // 🔎 Detección mínima basada SOLO en el prefijo "pedido desde"
-    if (tipo === 'text' && this.empiezaConPedidoDesde(texto)) {
-      try {
-        await this.procesarAutoPedidoDesde(numero, texto, nombre);
-      } catch (err) {
-        this.logger.error(`❌ Error procesando 'pedido desde': ${err?.message || err}`);
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ Ocurrió un problema al crear tu pedido automáticamente. Intenta nuevamente o escribe *hola* para usar el menú.'
-        );
-      }
-      return; // ⛔ ya gestionado
-    }
 
     // ⚡ Palabra clave "01" ⇒ mismo comportamiento que sticker oficial (pedido rápido comercio)
     if (tipo === 'text' && this.esTriggerRapidoPorTexto(texto)) {
@@ -538,9 +525,15 @@ export class ChatbotService {
         if (!comercio) {
           await this.enviarMensajeTexto(
             numero,
-            '⚠️ No pude identificar tu comercio para crear el pedido rápido.\n' +
-            'Si eres un comercio aliado, por favor verifica que nos escribes desde tu línea registrada.'
+            '🧾 *No encontré tu comercio en nuestro sistema.*\n' +
+            'Si deseas afiliarlo para activar pedidos rápidos,\n' +
+            'escríbenos al 📞 314 242 3130.'
           );
+
+          // 🔄 Reinicio inmediato del bot (hard reset)
+          estadoUsuarios.delete(numero);
+          await this.enviarListaOpciones(numero);
+
           return;
         }
 
@@ -748,17 +741,20 @@ export class ChatbotService {
           //   comercio = await this.comerciosService.findByTelefono(tel);
           // }
 
-        if (!comercio) {
-      await this.enviarMensajeTexto(
-        numero,
-        [
-          '🧾 *No encontré tu comercio en nuestro sistema.*',
-          'Si deseas afiliarlo para activar pedidos rápidos,',
-          'escríbenos al 📞 314 242 3130.'
-        ].join('\n')
-      );
-      return; // 👈 importante para no seguir con crearPedidoDesdeSticker
-    }
+          if (!comercio) {
+            await this.enviarMensajeTexto(
+              numero,
+              '🧾 *No encontré tu comercio en nuestro sistema.*\n' +
+              'Si deseas afiliarlo para activar pedidos rápidos,\n' +
+              'escríbenos al 📞 314 242 3130.'
+            );
+
+            // 🔄 Reinicio inmediato del bot (hard reset)
+            estadoUsuarios.delete(numero);
+            await this.enviarListaOpciones(numero);
+
+            return;
+          }
 
           await this.enviarMensajeTexto(
             numero,
@@ -884,62 +880,62 @@ export class ChatbotService {
       //       }
 
 
- if (/^aceptar_pedido_(\d+)$/.test(id)) {
-  const pedidoId = Number(id.match(/^aceptar_pedido_(\d+)$/)?.[1]);
-  const pedido = await this.getPedidoById(pedidoId);
+      if (/^aceptar_pedido_(\d+)$/.test(id)) {
+        const pedidoId = Number(id.match(/^aceptar_pedido_(\d+)$/)?.[1]);
+        const pedido = await this.getPedidoById(pedidoId);
 
-  if (!pedido || pedido.estado !== 5) {
-    await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no está disponible.');
-    return;
-  }
+        if (!pedido || pedido.estado !== 5) {
+          await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no está disponible.');
+          return;
+        }
 
-  // ✅ Confirmar asignación
-  await this.domiciliosService.update(pedidoId, { estado: 1 }); // asignado
+        // ✅ Confirmar asignación
+        await this.domiciliosService.update(pedidoId, { estado: 1 }); // asignado
 
-  // 🔄 Crear conversación
-  const conversacion = this.conversacionRepo.create({
-    numero_cliente: pedido.numero_cliente,
-    numero_domiciliario: numero,
-    fecha_inicio: new Date(),
-    estado: 'activa',
-  });
-  await this.conversacionRepo.save(conversacion);
+        // 🔄 Crear conversación
+        const conversacion = this.conversacionRepo.create({
+          numero_cliente: pedido.numero_cliente,
+          numero_domiciliario: numero,
+          fecha_inicio: new Date(),
+          estado: 'activa',
+        });
+        await this.conversacionRepo.save(conversacion);
 
-  estadoUsuarios.set(pedido.numero_cliente, {
-    conversacionId: conversacion.id,
-    inicioMostrado: true,
-  });
-  estadoUsuarios.set(numero, {
-    conversacionId: conversacion.id,
-    tipo: 'conversacion_activa',
-    inicioMostrado: true,
-  });
+        estadoUsuarios.set(pedido.numero_cliente, {
+          conversacionId: conversacion.id,
+          inicioMostrado: true,
+        });
+        estadoUsuarios.set(numero, {
+          conversacionId: conversacion.id,
+          tipo: 'conversacion_activa',
+          inicioMostrado: true,
+        });
 
-  // 🎉 Notificar DOMI
-  await this.enviarMensajeTexto(numero, '📦 Pedido *asignado a ti*. Ya puedes hablar con el cliente.');
+        // 🎉 Notificar DOMI
+        await this.enviarMensajeTexto(numero, '📦 Pedido *asignado a ti*. Ya puedes hablar con el cliente.');
 
-  // 🧩 Buscar datos del domi para informar bien al cliente
-  const domi = await this.domiciliarioService.getByTelefono(numero);
-  const nombreDomi = domi ? `${domi.nombre} ${domi.apellido ?? ''}`.trim() : numero;
-  const chaqueta = domi?.numero_chaqueta ?? '-';
-  const telDomi = numero.startsWith('+') ? numero : `+57${numero.replace(/\D/g, '').slice(-10)}`;
+        // 🧩 Buscar datos del domi para informar bien al cliente
+        const domi = await this.domiciliarioService.getByTelefono(numero);
+        const nombreDomi = domi ? `${domi.nombre} ${domi.apellido ?? ''}`.trim() : numero;
+        const chaqueta = domi?.numero_chaqueta ?? '-';
+        const telDomi = numero.startsWith('+') ? numero : `+57${numero.replace(/\D/g, '').slice(-10)}`;
 
-  // 👤 Notificar CLIENTE con toda la info
-  await this.enviarMensajeTexto(
-    pedido.numero_cliente,
-    [
-      '✅ ¡Domiciliario asignado!',
-      `👤 *${nombreDomi}*`,
-      `🧥 Chaqueta: *${chaqueta}*`,
-      `📞 WhatsApp: *${telDomi}*`,
-      '',
-      '📲 Ya puedes escribirle aquí.'
-    ].join('\n')
-  );
+        // 👤 Notificar CLIENTE con toda la info
+        await this.enviarMensajeTexto(
+          pedido.numero_cliente,
+          [
+            '✅ ¡Domiciliario asignado!',
+            `👤 *${nombreDomi}*`,
+            `🧥 Chaqueta: *${chaqueta}*`,
+            `📞 WhatsApp: *${telDomi}*`,
+            '',
+            '📲 Ya puedes escribirle aquí.'
+          ].join('\n')
+        );
 
-  await this.enviarBotonFinalizarAlDomi(numero);
-  return;
-}
+        await this.enviarBotonFinalizarAlDomi(numero);
+        return;
+      }
 
 
       if (/^rechazar_pedido_(\d+)$/.test(id)) {
