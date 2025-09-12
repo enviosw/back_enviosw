@@ -1938,8 +1938,16 @@ export class ChatbotService {
       // ... (resto de tu lógica de notificación/ cierre de conversación si existía)
       await this.enviarMensajeTexto(
         numero,
-        '🧡 Tu pedido ha sido *cancelado*. ¡Gracias por usar Domicilios W!'
+        `🧡 Tu pedido ha sido cancelado. ¡Gracias por confiar en Domiciliosw.com!
+
+Para no dejarte sin servicio, te compartimos opciones adicionales:
+📞 3144403062 – Veloz
+📞 3137057041 – Rapigo
+📞 3142423130 – Enviosw
+
+🚀 Así podrás realizar tu envío de manera rápida y segura.`
       );
+
 
       const s = estadoUsuarios.get(numero) || {};
       s.esperandoAsignacion = false;
