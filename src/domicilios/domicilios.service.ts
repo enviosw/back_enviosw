@@ -95,17 +95,19 @@ export class DomiciliosService {
 
 
 /** 📄 Listar SOLO domicilios de tipo_servicio = 3 y estado = 3 */
-async findTipoPlataforma(): Promise<Domicilio[]> {
+async findTipoPlataforma(estado: number): Promise<Domicilio[]> {
   return this.domicilioRepo.find({
     where: {
-      estado: 3
+      estado: Number(estado),
+      // 👇 si quieres filtrar también por tipo_servicio = 3
+      // tipo_servicio: 3
     },
     order: {
-      fecha_creacion: 'DESC'
-    }
+      fecha_creacion: 'DESC',
+    },
+    take: 50,   // 👈 limita a los últimos 50 registros
   });
 }
-
 
   
 

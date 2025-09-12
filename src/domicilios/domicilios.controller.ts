@@ -25,10 +25,9 @@ export class DomiciliosController {
     return this.domiciliosService.findAll();
   }
 
-
 @Get('plataforma')
-listarPlataforma(): Promise<Domicilio[]> {
-  return this.domiciliosService.findTipoPlataforma();
+listarPlataforma(@Query('estado') estado: number): Promise<Domicilio[]> {
+  return this.domiciliosService.findTipoPlataforma(estado);
 }
 
 
