@@ -961,10 +961,10 @@ export class ChatbotService {
         await this.enviarMensajeTexto(numero, '❌ Has rechazado el pedido.');
 
         // (Opcional) Avisar al cliente que seguimos buscando
-        await this.enviarMensajeTexto(
-          pedido.numero_cliente,
-          '⏳ El domiciliario no tomó la orden. Seguimos buscando otro disponible.'
-        );
+        // await this.enviarMensajeTexto(
+        //   pedido.numero_cliente,
+        //   '⏳ El domiciliario no tomó la orden. Seguimos buscando otro disponible.'
+        // );
 
         setTimeout(() => this.reintentarAsignacionPendientes(), 2000);
         return;
