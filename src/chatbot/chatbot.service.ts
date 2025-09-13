@@ -718,7 +718,7 @@ export class ChatbotService {
       await this.enviarMensajeImagenPorId(numero, urlImagen, saludo);
 
       // ⏱️ Pequeña pausa para que no se empalmen los mensajes
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // 🚀 Lista de opciones
       await this.enviarListaOpciones(numero);
@@ -1414,7 +1414,7 @@ export class ChatbotService {
       await this.enviarMensajeImagenPorId(numero, urlImagen, saludo);
 
       // ⏱️ pausa de 300 ms (usa 3000 si quieres ~3 segundos)
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 500));
 
 
       await this.enviarListaOpciones(numero);
