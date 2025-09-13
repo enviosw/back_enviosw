@@ -707,10 +707,13 @@ export class ChatbotService {
 
       // 🚀 Envía la imagen de saludo primero
       const urlImagen = `${urlImagenConstants.urlImg}`;
-      const saludo = `👋 Hola *${String(nombre)}*, soy *Wilber*, tu asistente virtual de *DOMICILIOS W*
+      const saludo = `🚀 Hola *${String(nombre)}*, ¡Bienvenido al futuro con *DOMICILIOS W*!  
 
-🛵💨 Pide tu servicio ingresando a nuestra *página web*:
+🤖 Ahora nuestra central no es humana, es un ✨ChatBot inteligente que recibe y procesa tus pedidos directamente con tu domiciliario.  
+
+🛵💨 Pide tu servicio ingresando a nuestra *página web*:  
 🌐 https://domiciliosw.com`;
+
 
       await this.enviarMensajeImagenPorId(numero, urlImagen, saludo);
 
@@ -1399,9 +1402,11 @@ export class ChatbotService {
       !this.estaEnCualquierFlujo(numero) && // ⛔ NO mostrar menú si está en flujo
       !menuBloqueado
     ) {
-      const saludo = `👋 Hola ${nombre}, soy *Wilber*, tu asistente virtual de *Domicilios W* 🛵💨
+      const saludo = `🚀 Hola ${nombre}, ¡Bienvenido al futuro con *Domicilios W*!  
 
-📲 Pide tu servicio ingresando a nuestra página web:
+🤖 Ahora nuestra central no es humana, es un ✨ChatBot inteligente que recibe y procesa tus pedidos directamente con tu domiciliario.  
+
+🛵💨 Pide tu servicio ingresando a nuestra página web:  
 🌐 https://domiciliosw.com/`;
 
       const urlImagen = `${urlImagenConstants.urlImg}`;
