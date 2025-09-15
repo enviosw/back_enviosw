@@ -2789,14 +2789,61 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
 
 
-  private async finalizarConversacionPorDomi(conversacionId: number) {
-    const conversacion = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
-    if (!conversacion) return { ok: false, msg: 'No se encontró la conversación' };
+private async finalizarConversacionPorDomi(conversacionId: number) {
+  const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
+  if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
+  if (conv.estado === 'finalizada') return { ok: true }; // idempotente
 
-    const cliente = conversacion.numero_cliente;
-    const domi = conversacion.numero_domiciliario;
+  const cliente = conv.numero_cliente;
+  const domi    = conv.numero_domiciliario;
 
-    // Mensaje al domi: pedir disponibilidad
+  // Helpers locales
+  const norm = (n?: string) => (String(n || '').replace(/\D/g, ''));
+  const variants = (n?: string) => {
+    const d = norm(n);
+    const ten = d.slice(-10);
+    const v = new Set<string>();
+    if (!ten) return v;
+    v.add(ten);
+    v.add(`57${ten}`);
+    v.add(`+57${ten}`);
+    v.add(d);
+    return v;
+  };
+  const clearAllFor = (num?: string) => {
+    for (const v of variants(num)) {
+      // estado en memoria
+      const st = estadoUsuarios.get(v);
+      if (st) {
+        delete st.conversacionId;
+        delete st.flujoActivo;
+        delete st.awaitingEstado;
+        delete st.awaitingEstadoExpiresAt;
+        delete st.soporteActivo;
+        delete st.soporteConversacionId;
+        delete st.soporteAsesor;
+        delete st.soporteCliente;
+        delete st.pedidoId;
+        estadoUsuarios.delete(v);
+      }
+      // timers
+      if (temporizadoresInactividad.has(v)) {
+        clearTimeout(temporizadoresInactividad.get(v)!);
+        temporizadoresInactividad.delete(v);
+      }
+      if (temporizadoresEstado.has(v)) {
+        clearTimeout(temporizadoresEstado.get(v)!);
+        temporizadoresEstado.delete(v);
+      }
+      if (bloqueoMenu.has(v)) {
+        clearTimeout(bloqueoMenu.get(v)!);
+        bloqueoMenu.delete(v);
+      }
+    }
+  };
+
+  // Mensajes (no bloquean el cierre si fallan)
+  try {
     await this.enviarMensajeTexto(
       domi,
       `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
@@ -2804,28 +2851,26 @@ Gracias por tu entrega y compromiso 👏
 
 👉 *Ahora elige tu estado:*`
     );
-
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: domi,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'Cambia tu disponibilidad:' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
+    await axiosWhatsapp.post('/messages', {
+      messaging_product: 'whatsapp',
+      to: domi,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: 'Cambia tu disponibilidad:' },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+            { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+          ],
         },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones de estado a ${domi}: ${(e?.response?.data?.error?.message || e?.message || e)}`);
-    }
+      },
+    });
+  } catch (e: any) {
+    this.logger.warn(`⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e}`);
+  }
 
-    // Mensaje al cliente (nuevo)
+  try {
     const mensajeCliente = [
       '✅ Gracias por confiar en nuestro servicio',
       'TU PEDIDO HA SIDO FINALIZADO CON ÉXITO.',
@@ -2837,30 +2882,28 @@ Gracias por tu entrega y compromiso 👏
       '',
       '📞 Quejas, reclamos y afiliaciones: 314 242 3130 – Wilber Álvarez'
     ].join('\n');
-
     await this.enviarMensajeTexto(cliente, mensajeCliente);
-
-
-    // Persistencia
-    conversacion.estado = 'finalizada';
-    conversacion.fecha_fin = new Date();
-    await this.conversacionRepo.save(conversacion);
-
-    // Limpieza de memoria/timers
-    estadoUsuarios.delete(cliente);
-    estadoUsuarios.delete(domi);
-
-    if (temporizadoresInactividad.has(cliente)) {
-      clearTimeout(temporizadoresInactividad.get(cliente)!);
-      temporizadoresInactividad.delete(cliente);
-    }
-    if (temporizadoresInactividad.has(domi)) {
-      clearTimeout(temporizadoresInactividad.get(domi)!);
-      temporizadoresInactividad.delete(domi);
-    }
-
-    return { ok: true };
+  } catch (e: any) {
+    this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
   }
+
+  // Persistencia: cerrar conversación SIEMPRE
+  conv.estado = 'finalizada';
+  conv.fecha_fin = new Date();
+  try {
+    await this.conversacionRepo.save(conv);
+  } catch (e: any) {
+    this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
+    // seguimos con limpieza en memoria igualmente
+  }
+
+  // Limpieza en memoria/timers (todas las variantes de número)
+  clearAllFor(cliente);
+  clearAllFor(domi);
+
+  return { ok: true };
+}
+
 
 
   // ⚙️ Crear/activar puente de soporte con asesor PSQR
