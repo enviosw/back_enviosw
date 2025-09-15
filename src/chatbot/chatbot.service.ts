@@ -259,27 +259,83 @@ export class ChatbotService {
             continue;
           }
 
-          // 3) Actualizar pedido -> asignado
+          // 3) Actualizar pedido -> ofertado
           await this.domiciliosService.update(pedido.id, {
             estado: 5, // ofertado
             id_domiciliario: domiciliario.id,
           });
 
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: domiciliario.telefono_whatsapp,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: `📦 *Nuevo pedido disponible*:\n\n${this.generarResumenPedidoDesdePedido(pedido)}` },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: `aceptar_pedido_${pedido.id}`, title: '✅ Aceptar' } },
-                  { type: 'reply', reply: { id: `rechazar_pedido_${pedido.id}`, title: '❌ Rechazar' } },
-                ],
-              },
-            },
-          });
+          // --- utilidades locales ---
+          const SAFE_BODY_MAX = 900; // margen seguro (<1024)
+          const TRANSIENT = new Set([408, 429, 500, 502, 503, 504]);
+          const sanearBody = (s: string) => {
+            let t = String(s || '').replace(/\s+/g, ' ').trim();
+            return t.length > SAFE_BODY_MAX ? t.slice(0, SAFE_BODY_MAX - 1) + '…' : t;
+          };
+
+          const bodyTexto = sanearBody(
+            `📦 *Nuevo pedido disponible*:\n\n${this.generarResumenPedidoDesdePedido(pedido)}`
+          );
+
+          // --- intento principal con reintentos ---
+          let enviado = false;
+          for (let intento = 1; intento <= 2 && !enviado; intento++) {
+            try {
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: domiciliario.telefono_whatsapp,
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: bodyTexto },
+                  action: {
+                    buttons: [
+                      { type: 'reply', reply: { id: `aceptar_pedido_${pedido.id}`, title: '✅ Aceptar' } },
+                      { type: 'reply', reply: { id: `rechazar_pedido_${pedido.id}`, title: '❌ Rechazar' } },
+                    ],
+                  },
+                },
+              });
+              enviado = true;
+            } catch (e: any) {
+              const status = Number(e?.response?.status);
+              const msg = e?.response?.data?.error?.message || e?.message || e;
+              this.logger.warn(`❗ Envío botones falló (intento ${intento}/2) → ${domiciliario.telefono_whatsapp}: ${msg}`);
+              if (!TRANSIENT.has(status)) break;
+              await new Promise(r => setTimeout(r, intento * 800));
+            }
+          }
+
+          // --- fallback: texto + botones mínimos ---
+          if (!enviado) {
+            try {
+              await this.enviarMensajeTexto(domiciliario.telefono_whatsapp, bodyTexto);
+            } catch (e) {
+              this.logger.warn(`No pude enviar resumen como texto: ${e instanceof Error ? e.message : e}`);
+            }
+
+            try {
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: domiciliario.telefono_whatsapp,
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '¿Deseas tomar este pedido?' }, // ultra corto, no se corta nunca
+                  action: {
+                    buttons: [
+                      { type: 'reply', reply: { id: `aceptar_pedido_${pedido.id}`, title: '✅ Aceptar' } },
+                      { type: 'reply', reply: { id: `rechazar_pedido_${pedido.id}`, title: '❌ Rechazar' } },
+                    ],
+                  },
+                },
+              });
+              enviado = true;
+            } catch (e: any) {
+              const msg = e?.response?.data?.error?.message || e?.message || e;
+              this.logger.error(`Fallback botones mínimos también falló: ${msg}`);
+            }
+          }
 
 
           // 5) Timeout: si no responde, volver a pendiente y reintentar
@@ -985,34 +1041,34 @@ export class ChatbotService {
         await this.enviarMensajeTexto(numero, '❌ Has rechazado el pedido.');
 
 
-            // Mensaje al domi: pedir disponibilidad
-    await this.enviarMensajeTexto(
-      numero,
-      `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+        // Mensaje al domi: pedir disponibilidad
+        await this.enviarMensajeTexto(
+          numero,
+          `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
 Gracias por tu entrega y compromiso 👏
 
 👉 *Ahora elige tu estado:*`
-    );
+        );
 
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'Cambia tu disponibilidad:' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones de estado a ${numero}: ${(e?.response?.data?.error?.message || e?.message || e)}`);
-    }
+        try {
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: numero,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: 'Cambia tu disponibilidad:' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                ],
+              },
+            },
+          });
+        } catch (e) {
+          this.logger.warn(`⚠️ Falló envío de botones de estado a ${numero}: ${(e?.response?.data?.error?.message || e?.message || e)}`);
+        }
 
 
         // (Opcional) Avisar al cliente que seguimos buscando
@@ -1247,23 +1303,79 @@ Gracias por tu entrega y compromiso 👏
             foto_entrega_url: '',
           });
 
-          // 3) Enviar botones al DOMI para Aceptar / Rechazar
+          // ——— límites y utilidades locales ———
+          const SAFE_BODY_MAX = 900; // margen seguro < 1024
+          const TRANSIENT = new Set([408, 429, 500, 502, 503, 504]);
+
+          const sanearBody = (s: string) => {
+            let t = String(s || '').replace(/\s+/g, ' ').trim();
+            return t.length > SAFE_BODY_MAX ? t.slice(0, SAFE_BODY_MAX - 1) + '…' : t;
+          };
+
+          // ——— construye el body con resumen, saneado ———
           const resumenParaDomi = this.generarResumenPedido(datos, tipo, nombre, numero);
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: domiciliario.telefono_whatsapp,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: `📦 *Nuevo pedido disponible*:\n\n${resumenParaDomi}` },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: `aceptar_pedido_${pedidoOfertado.id}`, title: '✅ Aceptar' } },
-                  { type: 'reply', reply: { id: `rechazar_pedido_${pedidoOfertado.id}`, title: '❌ Rechazar' } },
-                ],
-              },
-            },
-          });
+          const bodyTexto = sanearBody(`📦 *Nuevo pedido disponible*:\n\n${resumenParaDomi}`);
+
+          // ——— intenta enviar el interactive completo (con reintentos) ———
+          let enviado = false;
+          for (let intento = 1; intento <= 2 && !enviado; intento++) {
+            try {
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: domiciliario.telefono_whatsapp,
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: bodyTexto },
+                  action: {
+                    buttons: [
+                      { type: 'reply', reply: { id: `aceptar_pedido_${pedidoOfertado.id}`, title: '✅ Aceptar' } },
+                      { type: 'reply', reply: { id: `rechazar_pedido_${pedidoOfertado.id}`, title: '❌ Rechazar' } },
+                    ],
+                  },
+                },
+              });
+              enviado = true;
+            } catch (e: any) {
+              const status = Number(e?.response?.status);
+              const msg = e?.response?.data?.error?.message || e?.message || e;
+              this.logger.warn(`Interactive falló (intento ${intento}/2) → ${domiciliario.telefono_whatsapp}: ${msg}`);
+              if (!TRANSIENT.has(status)) break;               // si no es transitorio, no reintentes
+              await new Promise(r => setTimeout(r, intento * 600)); // backoff 0.6s / 1.2s
+            }
+          }
+
+          // ——— fallback: si no se pudo, manda resumen como texto y botones mínimos aparte ———
+          if (!enviado) {
+            try {
+              // 1) el texto completo (sin límite estricto)
+              await this.enviarMensajeTexto(domiciliario.telefono_whatsapp, bodyTexto);
+            } catch (e) {
+              this.logger.warn(`No pude enviar el resumen como texto: ${e instanceof Error ? e.message : e}`);
+            }
+
+            // 2) botones con body ultra corto (siempre cabe)
+            try {
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: domiciliario.telefono_whatsapp,
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '¿Deseas tomar este pedido?' },
+                  action: {
+                    buttons: [
+                      { type: 'reply', reply: { id: `aceptar_pedido_${pedidoOfertado.id}`, title: '✅ Aceptar' } },
+                      { type: 'reply', reply: { id: `rechazar_pedido_${pedidoOfertado.id}`, title: '❌ Rechazar' } },
+                    ],
+                  },
+                },
+              });
+            } catch (e: any) {
+              const msg = e?.response?.data?.error?.message || e?.message || e;
+              this.logger.error(`Fallback de botones mínimos también falló: ${msg}`);
+            }
+          }
 
           // 4) Avisar al cliente que estamos esperando confirmación del domiciliario
           await this.enviarMensajeTexto(
@@ -1600,264 +1712,486 @@ Gracias por tu entrega y compromiso 👏
   }
 
 
-async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
-  const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_1' };
+  async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
+    const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_1' };
 
-  switch (estado.paso) {
-    case 0: {
-      await this.enviarMensajeTexto(
-        numero,
-        '📝 Por favor, envíame en un *solo mensaje* los datos de *RECOGIDA*:\n' +
-        '📍 Dirección de recogida (con detalles: Apto, Piso, etc.)\n' +
-        '📞 Teléfono de recogida\n\n'       );
-      estado.paso = 1;
-      break;
-    }
-
-    case 1: {
-      if (!mensaje?.trim()) return;
-
-      const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
-
-      if (!direccion || direccion.length < 5) {
+    switch (estado.paso) {
+      case 0: {
         await this.enviarMensajeTexto(
           numero,
-          '⚠️ No detecté una *dirección de recogida* válida. Por favor envíala *junto con el teléfono* en un solo mensaje.\n' 
-                );
-        return;
-      }
-      if (!telefono || !/^\d{7,}$/.test(telefono)) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No detecté un *teléfono de recogida* válido (mínimo 7 dígitos). Reenvía *dirección + teléfono* en un solo mensaje.'
-        );
-        return;
+          '📝 Por favor, envíame en un *solo mensaje* los datos de *RECOGIDA*:\n' +
+          '📍 Dirección de recogida (con detalles: Apto, Piso, etc.)\n' +
+          '📞 Teléfono de recogida\n\n');
+        estado.paso = 1;
+        break;
       }
 
-      // Guarda en las claves que usa el creador de pedidos
-      estado.datos.direccionRecoger = direccion;
-      estado.datos.telefonoRecoger = telefono;
+      case 1: {
+        if (!mensaje?.trim()) return;
 
-      await this.enviarMensajeTexto(
-        numero,
-        '📦 Ahora envíame en un *solo mensaje* los datos de *ENTREGA*:\n' +
-        '📍 Dirección de entrega (con detalles: Apto, Piso, etc.)\n' +
-        '📞 Teléfono de quien recibe\n\n' 
-            );
-      estado.paso = 2;
-      break;
-    }
+        const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
 
-    case 2: {
-      if (!mensaje?.trim()) return;
-
-      // Evitar repetición del resumen/botones si ya se envió
-      if (estado.confirmacionEnviada) break;
-
-      const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
-
-      if (!direccion || direccion.length < 5) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No detecté una *dirección de entrega* válida. Envíala *junto con el teléfono* en un solo mensaje.\n' 
-                );
-        return;
-      }
-      if (!telefono || !/^\d{7,}$/.test(telefono)) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No detecté un *teléfono de entrega* válido (mínimo 7 dígitos). Reenvía *dirección + teléfono* en un solo mensaje.'
-        );
-        return;
-      }
-
-      // Guarda en ambas variantes por compatibilidad con el resto del código
-      estado.datos.direccionEntregar = direccion;
-      estado.datos.direccionEntrega = direccion;
-      estado.datos.telefonoEntregar = telefono;
-      estado.datos.telefonoEntrega = telefono;
-
-      const { direccionRecoger, telefonoRecoger, direccionEntregar, telefonoEntregar } = estado.datos;
-
-      await this.enviarMensajeTexto(
-        numero,
-        '✅ Verifica la información:\n\n' +
-        `📍 *Recoger en:* ${direccionRecoger}\n` +
-        `📞 *Tel recogida:* ${telefonoRecoger}\n\n` +
-        `🏠 *Entregar en:* ${direccionEntregar}\n` +
-        `📞 *Tel entrega:* ${telefonoEntregar}`
-      );
-
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿La información es correcta?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí' } },
-              { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
-            ],
-          },
-        },
-      });
-
-      estado.confirmacionEnviada = true;
-      estado.paso = 3;
-      break;
-    }
-
-    case 3:
-      // A la espera del botón (confirmar_info / editar_info)
-      break;
-
-    default: {
-      await this.enviarMensajeTexto(numero, '❓ No entendí. Vamos a comenzar de nuevo.');
-      estadoUsuarios.delete(numero);
-      await this.opcion1PasoAPaso(numero, '');
-      return;
-    }
-  }
-
-  estadoUsuarios.set(numero, estado);
-}
-
-
-
-// 👇 Helper: extrae la ÚLTIMA secuencia de ≥7 dígitos como teléfono y lo demás lo toma como dirección
-private extraerDireccionYTelefono(raw: string): { direccion: string | null; telefono: string | null } {
-  if (!raw) return { direccion: null, telefono: null };
-
-  const texto = String(raw).trim();
-
-  // busca secuencias de 7+ dígitos (captura móviles 10 dígitos y fijos 7+)
-  const matches = texto.match(/\d{7,}/g);
-  if (!matches || matches.length === 0) {
-    return { direccion: texto, telefono: null };
-  }
-
-  const telefono = matches[matches.length - 1]; // tomamos la ÚLTIMA (cliente suele poner el tel al final)
-  // quita separadores alrededor del teléfono al removerlo de la dirección
-  const direccion = texto
-    .replace(telefono, '')
-    .replace(/[,\-–—|:/]*\s*$/,'')              // separadores al final
-    .replace(/\s*(tel\.?:?)?\s*$/i,'')           // "tel:" al final
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-
-  return { direccion: direccion || null, telefono };
-}
-
-// Versión robusta con las mismas validaciones y tolerante a mensajes “juntos” (lista + dirección/teléfono)
-// - Extrae dirección y teléfono con this.extraerDireccionYTelefono(mensaje)
-// - Soporta cuando el usuario manda TODO en un solo mensaje (paso 1)
-// - En paso 2 también acepta si reenvía lista + entrega otra vez
-async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
-  const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_2' };
-
-  // Helper para detectar si un texto parece “lista de compras”
-  const esLista = (txt: string) => {
-    if (!txt) return false;
-    const lines = txt.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (lines.length === 0) return false;
-    // Heurísticas simples: líneas que empiezan con guion o con cantidad (número)
-    const score = lines.reduce((acc, line) => {
-      if (/^[-•*]\s*\S+/.test(line)) return acc + 1;
-      if (/^\d+(\s|x|un|una|dos|tres|cuatro|cinco)\b/i.test(line)) return acc + 1;
-      return acc;
-    }, 0);
-    return score >= Math.max(1, Math.floor(lines.length * 0.3)); // al menos 30% de líneas parecen items
-  };
-
-  // Intenta separar una “lista” del bloque “entrega (dirección+tel)” cuando vienen juntos.
-  // Estrategia: si el texto contiene una secuencia de ≥7 dígitos (tel) lo tratamos como que incluye entrega.
-  const separarListaYEntrega = (txt: string): { lista?: string; direccion?: string | null; telefono?: string | null } => {
-    if (!txt?.trim()) return {};
-    const tieneTel = /\d{7,}/.test(txt);
-    if (!tieneTel) {
-      // No hay teléfono: si parece lista, la devolvemos como lista y sin entrega.
-      return { lista: txt.trim(), direccion: null, telefono: null };
-    }
-
-    // Si hay teléfono, primero intentamos extraer (dirección+tel) del FINAL del mensaje:
-    // Buscamos la ÚLTIMA coincidencia de teléfono y nos quedamos con un “bloque final” que parezca entrega.
-    const matchAll = txt.match(/\d{7,}/g);
-    const tel = matchAll ? matchAll[matchAll.length - 1] : null;
-    if (!tel) return { lista: txt.trim(), direccion: null, telefono: null };
-
-    // Partimos por el último teléfono hacia el final
-    const idxTel = txt.lastIndexOf(tel);
-    const cabeza = txt.slice(0, idxTel);        // posible lista
-    const cola = (txt.slice(idxTel) || '').trim(); // teléfono + (posible dirección alrededor)
-
-    // Reconstruimos “bloque entrega” reinsertando el tel y tomando un poco de contexto antes del tel
-    const contextoAntes = cabeza.slice(Math.max(0, cabeza.length - 100)); // últimos 100 chars de “cabeza”
-    const candidatoEntrega = `${contextoAntes} ${cola}`.trim();
-
-    // Intentamos extraer dirección+tel del candidato
-    const { direccion, telefono } = this.extraerDireccionYTelefono(candidatoEntrega);
-
-    // Si logramos extraer una dirección decente, consideramos el resto (cabeza sin el contexto) como lista
-    if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
-      const listaPosible = cabeza.slice(0, Math.max(0, cabeza.length - contextoAntes.length)).trim();
-      const listaFinal = esLista(listaPosible) ? listaPosible : txt.trim(); // fallback: todo como lista si no pasa heurística
-      return { lista: listaFinal, direccion, telefono };
-    }
-
-    // Si no se pudo separar, lo tratamos como lista solamente
-    return { lista: txt.trim(), direccion: null, telefono: null };
-  };
-
-  switch (estado.paso) {
-    case 0: {
-      await this.enviarMensajeTexto(
-        numero,
-        '🛍️ Por favor, envíame tu *lista completa de compras* en un solo mensaje.\n\n' +
-        '👉 Incluye *cantidad* y *producto* por línea.\n' +
-        '✅ Ejemplo:\n' +
-        '- 2 Panes integrales\n' +
-        '- 1 Arroz x 500g\n' +
-        '- 3 Jugos de naranja\n\n'      );
-      estado.paso = 1;
-      break;
-    }
-
-    case 1: {
-      if (!mensaje?.trim()) return;
-
-      // Tolerar que el cliente mande *lista + entrega* en un solo mensaje
-      const { lista, direccion, telefono } = separarListaYEntrega(mensaje);
-
-      // Guardamos la lista si existe y pasa heurística; si no, guardamos “tal cual”
-      const listaOk = lista && esLista(lista);
-      estado.datos.listaCompras = listaOk ? lista!.trim() : mensaje.trim(); // fallback: todo el mensaje
-
-      if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
-        // Ya vino con datos de entrega: guardamos y saltamos directo a confirmación
-        estado.datos.direccionEntrega = direccion;
-        estado.datos.direccionEntregar = direccion; // compat
-        estado.datos.telefonoEntrega = telefono;
-        estado.datos.telefonoEntregar = telefono;   // compat
-
-        if (!estado.confirmacionEnviada) {
-          const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
+        if (!direccion || direccion.length < 5) {
           await this.enviarMensajeTexto(
             numero,
-            `🧾 Esta es la compra que solicitaste:\n\n` +
-            `📦 *Lista de compras:*\n${listaCompras}\n\n` +
-            `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
-            `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
+            '⚠️ No detecté una *dirección de recogida* válida. Por favor envíala *junto con el teléfono* en un solo mensaje.\n'
+          );
+          return;
+        }
+        if (!telefono || !/^\d{7,}$/.test(telefono)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No detecté un *teléfono de recogida* válido (mínimo 7 dígitos). Reenvía *dirección + teléfono* en un solo mensaje.'
+          );
+          return;
+        }
+
+        // Guarda en las claves que usa el creador de pedidos
+        estado.datos.direccionRecoger = direccion;
+        estado.datos.telefonoRecoger = telefono;
+
+        await this.enviarMensajeTexto(
+          numero,
+          '📦 Ahora envíame en un *solo mensaje* los datos de *ENTREGA*:\n' +
+          '📍 Dirección de entrega (con detalles: Apto, Piso, etc.)\n' +
+          '📞 Teléfono de quien recibe\n\n'
+        );
+        estado.paso = 2;
+        break;
+      }
+
+      case 2: {
+        if (!mensaje?.trim()) return;
+
+        // Evitar repetición del resumen/botones si ya se envió
+        if (estado.confirmacionEnviada) break;
+
+        const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
+
+        if (!direccion || direccion.length < 5) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No detecté una *dirección de entrega* válida. Envíala *junto con el teléfono* en un solo mensaje.\n'
+          );
+          return;
+        }
+        if (!telefono || !/^\d{7,}$/.test(telefono)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No detecté un *teléfono de entrega* válido (mínimo 7 dígitos). Reenvía *dirección + teléfono* en un solo mensaje.'
+          );
+          return;
+        }
+
+        // Guarda en ambas variantes por compatibilidad con el resto del código
+        estado.datos.direccionEntregar = direccion;
+        estado.datos.direccionEntrega = direccion;
+        estado.datos.telefonoEntregar = telefono;
+        estado.datos.telefonoEntrega = telefono;
+
+        const { direccionRecoger, telefonoRecoger, direccionEntregar, telefonoEntregar } = estado.datos;
+
+        await this.enviarMensajeTexto(
+          numero,
+          '✅ Verifica la información:\n\n' +
+          `📍 *Recoger en:* ${direccionRecoger}\n` +
+          `📞 *Tel recogida:* ${telefonoRecoger}\n\n` +
+          `🏠 *Entregar en:* ${direccionEntregar}\n` +
+          `📞 *Tel entrega:* ${telefonoEntregar}`
+        );
+
+        await axiosWhatsapp.post('/messages', {
+          messaging_product: 'whatsapp',
+          to: numero,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: { text: '¿La información es correcta?' },
+            action: {
+              buttons: [
+                { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí' } },
+                { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
+              ],
+            },
+          },
+        });
+
+        estado.confirmacionEnviada = true;
+        estado.paso = 3;
+        break;
+      }
+
+      case 3:
+        // A la espera del botón (confirmar_info / editar_info)
+        break;
+
+      default: {
+        await this.enviarMensajeTexto(numero, '❓ No entendí. Vamos a comenzar de nuevo.');
+        estadoUsuarios.delete(numero);
+        await this.opcion1PasoAPaso(numero, '');
+        return;
+      }
+    }
+
+    estadoUsuarios.set(numero, estado);
+  }
+
+
+
+  // 👇 Helper: extrae la ÚLTIMA secuencia de ≥7 dígitos como teléfono y lo demás lo toma como dirección
+  private extraerDireccionYTelefono(raw: string): { direccion: string | null; telefono: string | null } {
+    if (!raw) return { direccion: null, telefono: null };
+
+    const texto = String(raw).trim();
+
+    // busca secuencias de 7+ dígitos (captura móviles 10 dígitos y fijos 7+)
+    const matches = texto.match(/\d{7,}/g);
+    if (!matches || matches.length === 0) {
+      return { direccion: texto, telefono: null };
+    }
+
+    const telefono = matches[matches.length - 1]; // tomamos la ÚLTIMA (cliente suele poner el tel al final)
+    // quita separadores alrededor del teléfono al removerlo de la dirección
+    const direccion = texto
+      .replace(telefono, '')
+      .replace(/[,\-–—|:/]*\s*$/, '')              // separadores al final
+      .replace(/\s*(tel\.?:?)?\s*$/i, '')           // "tel:" al final
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    return { direccion: direccion || null, telefono };
+  }
+
+  // Versión robusta con las mismas validaciones y tolerante a mensajes “juntos” (lista + dirección/teléfono)
+  // - Extrae dirección y teléfono con this.extraerDireccionYTelefono(mensaje)
+  // - Soporta cuando el usuario manda TODO en un solo mensaje (paso 1)
+  // - En paso 2 también acepta si reenvía lista + entrega otra vez
+  async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
+    const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_2' };
+
+    // Helper para detectar si un texto parece “lista de compras”
+    const esLista = (txt: string) => {
+      if (!txt) return false;
+      const lines = txt.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (lines.length === 0) return false;
+      // Heurísticas simples: líneas que empiezan con guion o con cantidad (número)
+      const score = lines.reduce((acc, line) => {
+        if (/^[-•*]\s*\S+/.test(line)) return acc + 1;
+        if (/^\d+(\s|x|un|una|dos|tres|cuatro|cinco)\b/i.test(line)) return acc + 1;
+        return acc;
+      }, 0);
+      return score >= Math.max(1, Math.floor(lines.length * 0.3)); // al menos 30% de líneas parecen items
+    };
+
+    // Intenta separar una “lista” del bloque “entrega (dirección+tel)” cuando vienen juntos.
+    // Estrategia: si el texto contiene una secuencia de ≥7 dígitos (tel) lo tratamos como que incluye entrega.
+    const separarListaYEntrega = (txt: string): { lista?: string; direccion?: string | null; telefono?: string | null } => {
+      if (!txt?.trim()) return {};
+      const tieneTel = /\d{7,}/.test(txt);
+      if (!tieneTel) {
+        // No hay teléfono: si parece lista, la devolvemos como lista y sin entrega.
+        return { lista: txt.trim(), direccion: null, telefono: null };
+      }
+
+      // Si hay teléfono, primero intentamos extraer (dirección+tel) del FINAL del mensaje:
+      // Buscamos la ÚLTIMA coincidencia de teléfono y nos quedamos con un “bloque final” que parezca entrega.
+      const matchAll = txt.match(/\d{7,}/g);
+      const tel = matchAll ? matchAll[matchAll.length - 1] : null;
+      if (!tel) return { lista: txt.trim(), direccion: null, telefono: null };
+
+      // Partimos por el último teléfono hacia el final
+      const idxTel = txt.lastIndexOf(tel);
+      const cabeza = txt.slice(0, idxTel);        // posible lista
+      const cola = (txt.slice(idxTel) || '').trim(); // teléfono + (posible dirección alrededor)
+
+      // Reconstruimos “bloque entrega” reinsertando el tel y tomando un poco de contexto antes del tel
+      const contextoAntes = cabeza.slice(Math.max(0, cabeza.length - 100)); // últimos 100 chars de “cabeza”
+      const candidatoEntrega = `${contextoAntes} ${cola}`.trim();
+
+      // Intentamos extraer dirección+tel del candidato
+      const { direccion, telefono } = this.extraerDireccionYTelefono(candidatoEntrega);
+
+      // Si logramos extraer una dirección decente, consideramos el resto (cabeza sin el contexto) como lista
+      if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
+        const listaPosible = cabeza.slice(0, Math.max(0, cabeza.length - contextoAntes.length)).trim();
+        const listaFinal = esLista(listaPosible) ? listaPosible : txt.trim(); // fallback: todo como lista si no pasa heurística
+        return { lista: listaFinal, direccion, telefono };
+      }
+
+      // Si no se pudo separar, lo tratamos como lista solamente
+      return { lista: txt.trim(), direccion: null, telefono: null };
+    };
+
+    switch (estado.paso) {
+      case 0: {
+        await this.enviarMensajeTexto(
+          numero,
+          '🛍️ Por favor, envíame tu *lista completa de compras* en un solo mensaje.\n\n' +
+          '👉 Incluye *cantidad* y *producto* por línea.\n' +
+          '✅ Ejemplo:\n' +
+          '- 2 Panes integrales\n' +
+          '- 1 Arroz x 500g\n' +
+          '- 3 Jugos de naranja\n\n');
+        estado.paso = 1;
+        break;
+      }
+
+      case 1: {
+        if (!mensaje?.trim()) return;
+
+        // Tolerar que el cliente mande *lista + entrega* en un solo mensaje
+        const { lista, direccion, telefono } = separarListaYEntrega(mensaje);
+
+        // Guardamos la lista si existe y pasa heurística; si no, guardamos “tal cual”
+        const listaOk = lista && esLista(lista);
+        estado.datos.listaCompras = listaOk ? lista!.trim() : mensaje.trim(); // fallback: todo el mensaje
+
+        if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
+          // Ya vino con datos de entrega: guardamos y saltamos directo a confirmación
+          estado.datos.direccionEntrega = direccion;
+          estado.datos.direccionEntregar = direccion; // compat
+          estado.datos.telefonoEntrega = telefono;
+          estado.datos.telefonoEntregar = telefono;   // compat
+
+          if (!estado.confirmacionEnviada) {
+            const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
+            await this.enviarMensajeTexto(
+              numero,
+              `🧾 Esta es la compra que solicitaste:\n\n` +
+              `📦 *Lista de compras:*\n${listaCompras}\n\n` +
+              `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
+              `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
+            );
+
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿La información es correcta?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
+                    { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+                  ],
+                },
+              },
+            });
+
+            estado.confirmacionEnviada = true;
+            estado.paso = 3;
+            break;
+          }
+
+          // Si por alguna razón ya estaba enviada, no repetir
+          break;
+        }
+
+        // Si NO vino entrega aún, pedimos dirección + teléfono en un solo mensaje
+        await this.enviarMensajeTexto(
+          numero,
+          '📦 Ahora envíame *en un solo mensaje* la *dirección de entrega* y el *teléfono de quien recibe*.\n\n' +
+          '✍️ Escríbelo así (un solo texto):\n' +
+          '📍 Dirección, detalle / Apto / Piso - 📞 Teléfono 313*******\n\n'
+        );
+        estado.paso = 2;
+        break;
+      }
+
+      case 2: {
+        if (!mensaje?.trim()) return;
+
+        // Evitar repetición del resumen y botones
+        if (estado.confirmacionEnviada) break;
+
+        // Tolerar que aquí el usuario reenvíe *lista + entrega* otra vez
+        const { lista, direccion, telefono } = separarListaYEntrega(mensaje);
+
+        // Si detectamos una lista y todavía no hay lista guardada, aprovechamos
+        if (lista && esLista(lista) && !estado.datos.listaCompras) {
+          estado.datos.listaCompras = lista.trim();
+        }
+
+        // Validamos dirección/teléfono
+        if (!direccion || direccion.length < 5) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No logré detectar una *dirección* válida. Por favor envíame *dirección y teléfono juntos en un solo mensaje*.\n\n'
+          );
+          return;
+        }
+
+        if (!telefono || !/^\d{7,}$/.test(telefono)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No logré detectar un *teléfono* válido (mínimo 7 dígitos). ' +
+            'Por favor reenvía *dirección y teléfono juntos en un solo mensaje*.\n\n'
+          );
+          return;
+        }
+
+        // Guardamos ya separados (incluye claves de compatibilidad)
+        estado.datos.direccionEntrega = direccion;
+        estado.datos.direccionEntregar = direccion;
+        estado.datos.telefonoEntrega = telefono;
+        estado.datos.telefonoEntregar = telefono;
+
+        const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
+
+        await this.enviarMensajeTexto(
+          numero,
+          `🧾 Esta es la compra que solicitaste:\n\n` +
+          `📦 *Lista de compras:*\n${listaCompras}\n\n` +
+          `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
+          `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
+        );
+
+        await axiosWhatsapp.post('/messages', {
+          messaging_product: 'whatsapp',
+          to: numero,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: { text: '¿La información es correcta?' },
+            action: {
+              buttons: [
+                { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
+                { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+              ],
+            },
+          },
+        });
+
+        estado.confirmacionEnviada = true;
+        estado.paso = 3;
+        break;
+      }
+
+      case 3:
+        // Esperamos respuesta de los botones (confirmar_compra / editar_compra)
+        break;
+
+      default: {
+        await this.enviarMensajeTexto(numero, '❗ Algo salió mal. Reiniciamos el proceso.');
+        estadoUsuarios.delete(numero);
+        await this.opcion2PasoAPaso(numero, '');
+        return;
+      }
+    }
+
+    estadoUsuarios.set(numero, estado); // Guardar cambios en memoria
+  }
+
+
+
+
+  // Versión robusta y tolerante a mensajes “juntos” / reenvíos.
+  // - Usa this.extraerDireccionYTelefono(mensaje) para separar dirección y teléfono.
+  // - Acepta que el usuario reenvíe la info completa estando en paso 2 (actualiza y re-confirma sin duplicar).
+  // - Evita repetir el resumen/botones con estado.confirmacionEnviada.
+  // - Guarda claves de compatibilidad si aplica.
+  async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
+    const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
+
+    switch (estado.paso) {
+      case 0: {
+        await this.enviarMensajeTexto(
+          numero,
+          '💰 Para realizar un pago, primero debemos *recoger el dinero*.\n\n' +
+          '📍 Envíame *en un solo mensaje* la *dirección de recogida* y el *teléfono* de contacto.\n\n'
+        );
+        estado.paso = 1;
+        break;
+      }
+
+      case 1: {
+        if (!mensaje?.trim()) return;
+
+        const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
+
+        // Validación de dirección
+        if (!direccion || direccion.length < 5) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No logré detectar una *dirección válida*.\n' +
+            'Por favor envíame *dirección y teléfono juntos en un solo mensaje*.\n\n'
+          );
+          return;
+        }
+
+        // Validación de teléfono (mínimo 7 dígitos; acepta fijos y móviles)
+        if (!telefono || !/^\d{7,}$/.test(telefono)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No logré detectar un *teléfono válido* (mínimo 7 dígitos).\n' +
+            'Reenvía *dirección y teléfono juntos en un solo mensaje*.'
+          );
+          return;
+        }
+
+        // Guardado (incluye claves de compatibilidad usadas en otras partes del flujo)
+        estado.datos.direccionRecoger = direccion;
+        estado.datos.telefonoRecoger = telefono;
+
+        // Evitar repetición de confirmación si ya fue enviada
+        if (estado.confirmacionEnviada) break;
+
+        await this.enviarMensajeTexto(
+          numero,
+          `✅ Esta es la información que me diste:\n\n` +
+          `📍 *Dirección de recogida:* ${estado.datos.direccionRecoger}\n` +
+          `📞 *Teléfono:* ${estado.datos.telefonoRecoger}`
+        );
+
+        await axiosWhatsapp.post('/messages', {
+          messaging_product: 'whatsapp',
+          to: numero,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: { text: '¿La información es correcta?' },
+            action: {
+              buttons: [
+                { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
+                { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+              ],
+            },
+          },
+        });
+
+        estado.confirmacionEnviada = true;
+        estado.paso = 2;
+        break;
+      }
+
+      case 2: {
+        // Aquí esperamos los botones, pero si el usuario reenvía la dirección+tel,
+        // actualizamos y re-mostramos la confirmación (sin duplicar).
+        if (!mensaje?.trim()) break;
+
+        const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
+
+        // Si el mensaje contiene una dirección+tel válidos, lo tomamos como corrección
+        if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
+          estado.datos.direccionRecoger = direccion;
+          estado.datos.telefonoRecoger = telefono;
+
+          await this.enviarMensajeTexto(
+            numero,
+            `✍️ *Actualicé* la información de recogida:\n\n` +
+            `📍 *Dirección de recogida:* ${estado.datos.direccionRecoger}\n` +
+            `📞 *Teléfono:* ${estado.datos.telefonoRecoger}`
           );
 
+          // Reenviamos botones sin volver a marcar confirmacionEnviada (ya estaba true)
           await axiosWhatsapp.post('/messages', {
             messaging_product: 'whatsapp',
             to: numero,
             type: 'interactive',
             interactive: {
               type: 'button',
-              body: { text: '¿La información es correcta?' },
+              body: { text: '¿La información es correcta ahora?' },
               action: {
                 buttons: [
                   { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
@@ -1866,243 +2200,21 @@ async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
               },
             },
           });
-
-          estado.confirmacionEnviada = true;
-          estado.paso = 3;
-          break;
         }
-
-        // Si por alguna razón ya estaba enviada, no repetir
+        // Si no trae una dirección/teléfono válidos, simplemente ignoramos y seguimos esperando los botones
         break;
       }
 
-      // Si NO vino entrega aún, pedimos dirección + teléfono en un solo mensaje
-      await this.enviarMensajeTexto(
-        numero,
-        '📦 Ahora envíame *en un solo mensaje* la *dirección de entrega* y el *teléfono de quien recibe*.\n\n' +
-        '✍️ Escríbelo así (un solo texto):\n' +
-        '📍 Dirección, detalle / Apto / Piso - 📞 Teléfono 313*******\n\n' 
-      );
-      estado.paso = 2;
-      break;
-    }
-
-    case 2: {
-      if (!mensaje?.trim()) return;
-
-      // Evitar repetición del resumen y botones
-      if (estado.confirmacionEnviada) break;
-
-      // Tolerar que aquí el usuario reenvíe *lista + entrega* otra vez
-      const { lista, direccion, telefono } = separarListaYEntrega(mensaje);
-
-      // Si detectamos una lista y todavía no hay lista guardada, aprovechamos
-      if (lista && esLista(lista) && !estado.datos.listaCompras) {
-        estado.datos.listaCompras = lista.trim();
-      }
-
-      // Validamos dirección/teléfono
-      if (!direccion || direccion.length < 5) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No logré detectar una *dirección* válida. Por favor envíame *dirección y teléfono juntos en un solo mensaje*.\n\n' 
-                );
+      default: {
+        await this.enviarMensajeTexto(numero, '❌ Algo salió mal. Empecemos de nuevo.');
+        estadoUsuarios.delete(numero);
+        await this.opcion3PasoAPaso(numero, '');
         return;
       }
-
-      if (!telefono || !/^\d{7,}$/.test(telefono)) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No logré detectar un *teléfono* válido (mínimo 7 dígitos). ' +
-          'Por favor reenvía *dirección y teléfono juntos en un solo mensaje*.\n\n' 
-                );
-        return;
-      }
-
-      // Guardamos ya separados (incluye claves de compatibilidad)
-      estado.datos.direccionEntrega = direccion;
-      estado.datos.direccionEntregar = direccion;
-      estado.datos.telefonoEntrega = telefono;
-      estado.datos.telefonoEntregar = telefono;
-
-      const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
-
-      await this.enviarMensajeTexto(
-        numero,
-        `🧾 Esta es la compra que solicitaste:\n\n` +
-        `📦 *Lista de compras:*\n${listaCompras}\n\n` +
-        `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
-        `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
-      );
-
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿La información es correcta?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
-              { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
-            ],
-          },
-        },
-      });
-
-      estado.confirmacionEnviada = true;
-      estado.paso = 3;
-      break;
     }
 
-    case 3:
-      // Esperamos respuesta de los botones (confirmar_compra / editar_compra)
-      break;
-
-    default: {
-      await this.enviarMensajeTexto(numero, '❗ Algo salió mal. Reiniciamos el proceso.');
-      estadoUsuarios.delete(numero);
-      await this.opcion2PasoAPaso(numero, '');
-      return;
-    }
+    estadoUsuarios.set(numero, estado);
   }
-
-  estadoUsuarios.set(numero, estado); // Guardar cambios en memoria
-}
-
-
-
-
-// Versión robusta y tolerante a mensajes “juntos” / reenvíos.
-// - Usa this.extraerDireccionYTelefono(mensaje) para separar dirección y teléfono.
-// - Acepta que el usuario reenvíe la info completa estando en paso 2 (actualiza y re-confirma sin duplicar).
-// - Evita repetir el resumen/botones con estado.confirmacionEnviada.
-// - Guarda claves de compatibilidad si aplica.
-async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
-  const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
-
-  switch (estado.paso) {
-    case 0: {
-      await this.enviarMensajeTexto(
-        numero,
-        '💰 Para realizar un pago, primero debemos *recoger el dinero*.\n\n' +
-        '📍 Envíame *en un solo mensaje* la *dirección de recogida* y el *teléfono* de contacto.\n\n' 
-            );
-      estado.paso = 1;
-      break;
-    }
-
-    case 1: {
-      if (!mensaje?.trim()) return;
-
-      const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
-
-      // Validación de dirección
-      if (!direccion || direccion.length < 5) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No logré detectar una *dirección válida*.\n' +
-          'Por favor envíame *dirección y teléfono juntos en un solo mensaje*.\n\n' 
-                );
-        return;
-      }
-
-      // Validación de teléfono (mínimo 7 dígitos; acepta fijos y móviles)
-      if (!telefono || !/^\d{7,}$/.test(telefono)) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No logré detectar un *teléfono válido* (mínimo 7 dígitos).\n' +
-          'Reenvía *dirección y teléfono juntos en un solo mensaje*.'
-        );
-        return;
-      }
-
-      // Guardado (incluye claves de compatibilidad usadas en otras partes del flujo)
-      estado.datos.direccionRecoger = direccion;
-      estado.datos.telefonoRecoger  = telefono;
-
-      // Evitar repetición de confirmación si ya fue enviada
-      if (estado.confirmacionEnviada) break;
-
-      await this.enviarMensajeTexto(
-        numero,
-        `✅ Esta es la información que me diste:\n\n` +
-        `📍 *Dirección de recogida:* ${estado.datos.direccionRecoger}\n` +
-        `📞 *Teléfono:* ${estado.datos.telefonoRecoger}`
-      );
-
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿La información es correcta?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
-              { type: 'reply', reply: { id: 'editar_compra',    title: '🔁 No, editar' } },
-            ],
-          },
-        },
-      });
-
-      estado.confirmacionEnviada = true;
-      estado.paso = 2;
-      break;
-    }
-
-    case 2: {
-      // Aquí esperamos los botones, pero si el usuario reenvía la dirección+tel,
-      // actualizamos y re-mostramos la confirmación (sin duplicar).
-      if (!mensaje?.trim()) break;
-
-      const { direccion, telefono } = this.extraerDireccionYTelefono(mensaje);
-
-      // Si el mensaje contiene una dirección+tel válidos, lo tomamos como corrección
-      if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
-        estado.datos.direccionRecoger = direccion;
-        estado.datos.telefonoRecoger  = telefono;
-
-        await this.enviarMensajeTexto(
-          numero,
-          `✍️ *Actualicé* la información de recogida:\n\n` +
-          `📍 *Dirección de recogida:* ${estado.datos.direccionRecoger}\n` +
-          `📞 *Teléfono:* ${estado.datos.telefonoRecoger}`
-        );
-
-        // Reenviamos botones sin volver a marcar confirmacionEnviada (ya estaba true)
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: numero,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: '¿La información es correcta ahora?' },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
-                { type: 'reply', reply: { id: 'editar_compra',    title: '🔁 No, editar' } },
-              ],
-            },
-          },
-        });
-      }
-      // Si no trae una dirección/teléfono válidos, simplemente ignoramos y seguimos esperando los botones
-      break;
-    }
-
-    default: {
-      await this.enviarMensajeTexto(numero, '❌ Algo salió mal. Empecemos de nuevo.');
-      estadoUsuarios.delete(numero);
-      await this.opcion3PasoAPaso(numero, '');
-      return;
-    }
-  }
-
-  estadoUsuarios.set(numero, estado);
-}
 
 
   private async enviarSticker(numero: string, mediaId: string): Promise<void> {
