@@ -832,7 +832,7 @@ export class ChatbotService {
 
       // 🚀 Envía la imagen de saludo primero
       const urlImagen = `${urlImagenConstants.urlImg}`;
-const saludo = `🚀 ${String(nombre)} Bienvenido al futuro con *DomiciliosW.com*  
+      const saludo = `🚀 ${String(nombre)} Bienvenido al futuro con *DomiciliosW.com*  
 
 🤖 Tu pedido ahora lo recibe un ChatBot inteligente y lo envía directo a tu domiciliario.  
 
@@ -1341,7 +1341,6 @@ Gracias por tu entrega y compromiso 👏
           if (!domiciliario) {
             this.logger.warn('⚠️ No hay domiciliarios disponibles en este momento.');
 
-            // Flag de espera para no romper el flujo
             st.esperandoAsignacion = true;
             st.avisoNoDomiEnviado = Boolean(st.avisoNoDomiEnviado);
 
@@ -1362,10 +1361,9 @@ Gracias por tu entrega y compromiso 👏
             }
             estadoUsuarios.set(numero, st);
 
-            // 2) Registrar pedido como PENDIENTE (sin domiciliario)
             const pedidoPendiente = await this.domiciliosService.create({
               mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
-              estado: 0, // pendiente
+              estado: 0,
               numero_cliente: numero,
               fecha: new Date().toISOString(),
               hora: new Date().toTimeString().slice(0, 5),
@@ -1389,14 +1387,13 @@ Gracias por tu entrega y compromiso 👏
                 60 * 1000
               );
             }
-
             return;
           }
 
-          // 2) Sí hay domi: crear pedido como OFERTADO (estado=5), sin conversación todavía
+          // 2) Sí hay domi: crear pedido como OFERTADO
           const pedidoOfertado = await this.domiciliosService.create({
             mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
-            estado: 5, // 👈 OFERTADO (esperando aceptación del domiciliario)
+            estado: 5,
             numero_cliente: numero,
             fecha: new Date().toISOString(),
             hora: new Date().toTimeString().slice(0, 5),
@@ -1412,20 +1409,53 @@ Gracias por tu entrega y compromiso 👏
             foto_entrega_url: '',
           });
 
-          // ——— límites y utilidades locales ———
-          const SAFE_BODY_MAX = 900; // margen seguro < 1024
+          const SAFE_BODY_MAX = 900;
           const TRANSIENT = new Set([408, 429, 500, 502, 503, 504]);
 
           const sanearBody = (s: string) => {
-            let t = String(s || '').replace(/\s+/g, ' ').trim();
-            return t.length > SAFE_BODY_MAX ? t.slice(0, SAFE_BODY_MAX - 1) + '…' : t;
+            if (!s) return '';
+            let t = String(s);
+            t = t.replace(/\r\n?/g, '\n');
+            t = t.replace(/\t/g, ' ');
+            if (t.length > SAFE_BODY_MAX) {
+              t = t.slice(0, SAFE_BODY_MAX - 1) + '…';
+            }
+            return t;
           };
 
-          // ——— construye el body con resumen, saneado ———
-          const resumenParaDomi = this.generarResumenPedido(datos, tipo, nombre, numero);
-          const bodyTexto = sanearBody(`📦 *Nuevo pedido disponible*:\n\n${resumenParaDomi}`);
+          // Armado manual del mensaje con saltos de línea entre propiedades
+          const partes: string[] = [];
+          partes.push('📦 *Nuevo pedido disponible*', '');
 
-          // ——— intenta enviar el interactive completo (con reintentos) ———
+          if (datos.direccionRecoger) {
+            partes.push(`📍 *Recoger en:*\n${datos.direccionRecoger}`);
+            partes.push(`\n📞 *Tel:*\n${datos.telefonoRecoger || ''}`);
+            partes.push('');
+          }
+
+          const entregarDir = datos.direccionEntregar || datos.direccionEntrega;
+          const telEntregar = datos.telefonoEntregar || datos.telefonoEntrega;
+          if (entregarDir) {
+            partes.push(`🏠 *Entregar en:*\n${entregarDir}`);
+            partes.push(`\n📞 *Tel:*\n${telEntregar || ''}`);
+            partes.push('');
+          }
+
+          if (datos.listaCompras) {
+            const listaRaw = String(datos.listaCompras).trim().replace(/\r\n?/g, '\n');
+            const listaFmt = /\n/.test(listaRaw) ? listaRaw : listaRaw.replace(/,\s*/g, '\n');
+            partes.push('🛒 *Lista de compras:*\n' + listaFmt);
+            partes.push('');
+          }
+
+          partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio').replace('opcion_', '')}`);
+
+          const bodyTexto = sanearBody(partes.join('\n'));
+
+          console.log('---------------------------------------------');
+          console.log(bodyTexto);
+          console.log('---------------------------------------------');
+
           let enviado = false;
           for (let intento = 1; intento <= 2 && !enviado; intento++) {
             try {
@@ -1449,21 +1479,17 @@ Gracias por tu entrega y compromiso 👏
               const status = Number(e?.response?.status);
               const msg = e?.response?.data?.error?.message || e?.message || e;
               this.logger.warn(`Interactive falló (intento ${intento}/2) → ${domiciliario.telefono_whatsapp}: ${msg}`);
-              if (!TRANSIENT.has(status)) break;               // si no es transitorio, no reintentes
-              await new Promise(r => setTimeout(r, intento * 600)); // backoff 0.6s / 1.2s
+              if (!TRANSIENT.has(status)) break;
+              await new Promise(r => setTimeout(r, intento * 600));
             }
           }
 
-          // ——— fallback: si no se pudo, manda resumen como texto y botones mínimos aparte ———
           if (!enviado) {
             try {
-              // 1) el texto completo (sin límite estricto)
               await this.enviarMensajeTexto(domiciliario.telefono_whatsapp, bodyTexto);
             } catch (e) {
               this.logger.warn(`No pude enviar el resumen como texto: ${e instanceof Error ? e.message : e}`);
             }
-
-            // 2) botones con body ultra corto (siempre cabe)
             try {
               await axiosWhatsapp.post('/messages', {
                 messaging_product: 'whatsapp',
@@ -1486,13 +1512,8 @@ Gracias por tu entrega y compromiso 👏
             }
           }
 
-          // 4) Avisar al cliente que estamos esperando confirmación del domiciliario
-          await this.enviarMensajeTexto(
-            numero,
-            '⏳ Estamos procesando tu domicilio. Gracias por preferirnos.'
-          );
+          await this.enviarMensajeTexto(numero, '⏳ Estamos procesando tu domicilio. Gracias por preferirnos.');
 
-          // 5) (Opcional) botón de cancelar para el cliente mientras espera
           if (pedidoOfertado?.id) {
             await this.mostrarMenuPostConfirmacion(
               numero,
@@ -1502,14 +1523,10 @@ Gracias por tu entrega y compromiso 👏
             );
           }
 
-          // 6) TTL: si el domi NO responde en 2 minutos, volver a PENDIENTE (0) y reofertar
           setTimeout(async () => {
             try {
-              // 🔹 DENTRO de: setTimeout(async () => { ... }, 120_000)
               const p = await this.getPedidoById(pedidoOfertado.id);
               if (p?.estado === 5) {
-
-                // 👇 LIBERAR DOMICILIARIO SI NO RESPONDIÓ
                 if (p.id_domiciliario) {
                   try {
                     await this.domiciliarioService.liberarDomiciliario(p.id_domiciliario);
@@ -1517,28 +1534,22 @@ Gracias por tu entrega y compromiso 👏
                     this.logger.warn(`No se pudo liberar domi ${p.id_domiciliario} tras timeout: ${e?.message || e}`);
                   }
                 }
-
                 await this.domiciliosService.update(p.id, {
                   estado: 0,
                   id_domiciliario: null,
                   motivo_cancelacion: 'No respuesta de domiciliario',
                 });
-
                 this.logger.warn(`⏰ Domi no respondió. Reofertando pedido id=${p.id}`);
                 this.reintentarAsignacionPendientes();
               }
-
             } catch (e) {
               this.logger.error(`Timeout oferta falló para pedido ${pedidoOfertado.id}: ${e?.message || e}`);
             }
-          }, 120_000); // 2 minutos
+          }, 120_000);
 
-          return; // ✅ No crees conversación aquí; se crea en aceptar_pedido_*
+          return;
         } catch (error) {
-          // Errores inesperados (distintos a "no hay domis")
           this.logger.warn(`⚠️ Error al ofertar pedido: ${error?.message || error}`);
-
-          // Respaldo: crear PENDIENTE (0) y avisar
           st.esperandoAsignacion = true;
           st.avisoNoDomiEnviado = Boolean(st.avisoNoDomiEnviado);
 
@@ -1559,7 +1570,7 @@ Gracias por tu entrega y compromiso 👏
 
           const pedidoPendiente = await this.domiciliosService.create({
             mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
-            estado: 0, // pendiente
+            estado: 0,
             numero_cliente: numero,
             fecha: new Date().toISOString(),
             hora: new Date().toTimeString().slice(0, 5),
@@ -1583,10 +1594,10 @@ Gracias por tu entrega y compromiso 👏
               60 * 1000
             );
           }
-
           return;
         }
       }
+
 
 
 
@@ -2349,28 +2360,28 @@ Gracias por tu entrega y compromiso 👏
 
 
 
-  private generarResumenPedido(datos: any, tipo: string, nombre: string, numero: string): string {
-    if (!datos) return 'Sin datos del pedido.';
+  // private generarResumenPedido(datos: any, tipo: string, nombre: string, numero: string): string {
+  //   if (!datos) return 'Sin datos del pedido.';
 
-    const recoger = datos.direccionRecoger
-      ? `📍 *Recoger en:* ${datos.direccionRecoger}\n📞 *Tel:* ${datos.telefonoRecoger}`
-      : '';
+  //   const recoger = datos.direccionRecoger
+  //     ? `📍 *Recoger en:* ${datos.direccionRecoger}\n📞 *Tel:* ${datos.telefonoRecoger}`
+  //     : '';
 
-    const entregar = datos.direccionEntregar || datos.direccionEntrega;
-    const telEntregar = datos.telefonoEntregar;
-    const entrega = entregar
-      ? `🏠 *Entregar en:* ${entregar}\n📞 *Tel:* ${telEntregar}`
-      : '';
+  //   const entregar = datos.direccionEntregar || datos.direccionEntrega;
+  //   const telEntregar = datos.telefonoEntregar;
+  //   const entrega = entregar
+  //     ? `🏠 *Entregar en:* ${entregar}\n📞 *Tel:* ${telEntregar}`
+  //     : '';
 
-    const lista = datos.listaCompras
-      ? `🛒 *Lista de compras:*\n${datos.listaCompras}`
-      : '';
+  //   const lista = datos.listaCompras
+  //     ? `🛒 *Lista de compras:*\n${datos.listaCompras}`
+  //     : '';
 
-    let resumen = [recoger, entrega, lista].filter(Boolean).join('\n\n');
-    resumen += `\n\n🔁 Tipo de servicio: *${tipo.replace('opcion_', '')}*`;
+  //   let resumen = [recoger, entrega, lista].filter(Boolean).join('\n\n');
+  //   resumen += `\n\n🔁 Tipo de servicio: *${tipo.replace('opcion_', '')}*`;
 
-    return resumen.trim();
-  }
+  //   return resumen.trim();
+  // }
 
 
   private async mostrarMenuPostConfirmacion(
@@ -3133,24 +3144,31 @@ Gracias por tu entrega y compromiso 👏
   }
 
   // Lee un monto desde texto: soporta 15000, 15.000, $ 12.500, 12,5 etc.
+  // Lee un monto desde texto PERO:
+  // - Solo acepta dígitos (se ignoran $ . , espacios, etc.)
+  // - Requiere al menos 4 cifras (>= 1000)
+  // - Rechaza decimales
+  // Solo acepta números enteros, sin símbolos ni separadores
+  // Requiere al menos 4 cifras (>= 1000)
   private parseMonto(raw?: string): number | null {
     if (!raw) return null;
-    let t = String(raw).trim();
-    t = t.replace(/[^\d.,]/g, ''); // deja solo dígitos/coma/punto
 
-    const lastComma = t.lastIndexOf(',');
-    const lastDot = t.lastIndexOf('.');
-    if (lastComma > lastDot) {
-      // coma decimal → quitar puntos (miles) y cambiar coma por punto
-      t = t.replace(/\./g, '').replace(',', '.');
-    } else {
-      // punto decimal → quitar comas (miles)
-      t = t.replace(/,/g, '');
-    }
+    const limpio = String(raw).trim();
 
-    const n = Number(t);
-    return Number.isFinite(n) && n >= 0 ? n : null;
+    // ✅ Solo dígitos permitidos
+    if (!/^\d+$/.test(limpio)) return null;
+
+    // Convierte a número
+    const n = Number(limpio);
+
+    // Debe ser al menos 1000 (4 cifras)
+    if (!Number.isFinite(n) || n < 1000) return null;
+
+    return n;
   }
+
+
+
 
 }
 
