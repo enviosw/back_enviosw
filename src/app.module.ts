@@ -19,7 +19,6 @@ import { DomiliariosModule } from './domiliarios/domiliarios.module';
 import { DomiciliosModule } from './domicilios/domicilios.module';
 import { ShortlinksModule } from './shortlinks/shortlinks.module';
 import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
-import { IngresosModule } from './ingresos/ingresos.module';
 
 @Module({
   imports: [
@@ -80,7 +79,6 @@ import { IngresosModule } from './ingresos/ingresos.module';
     
     ComerciosQrModule,
     
-    IngresosModule,
   ],
 })
 export class AppModule { }

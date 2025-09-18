@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { Mensaje } from './entities/mensajes.entity';
 import { Cron } from '@nestjs/schedule';
 import { stickerConstants, urlImagenConstants } from '../auth/constants/jwt.constant';
+import { PrecioDomicilio } from './entities/precio-domicilio.entity';
 
 
 const estadoUsuarios = new Map<string, any>();
@@ -24,7 +25,7 @@ function isExpired(ts?: number) {
 }
 
 
-const ASESOR_PSQR = '573208729276';
+const ASESOR_PSQR = '573142423130';
 
 const TRIGGER_PALABRA_CLAVE = '01';
 // 👉 Si mañana agregas más stickers, solo pon sus SHA aquí:
@@ -51,6 +52,9 @@ export class ChatbotService {
 
     @InjectRepository(Mensaje)
     private readonly mensajeRepo: Repository<Mensaje>,
+
+    @InjectRepository(PrecioDomicilio)
+    private readonly precioRepo: Repository<PrecioDomicilio>,
 
   ) { }
 
@@ -457,6 +461,50 @@ export class ChatbotService {
     const texto = mensaje?.text?.body;
     const nombre = value?.contacts?.[0]?.profile?.name ?? 'cliente';
 
+    // --- CAPTURA DE PRECIO EN CURSO ---
+    {
+      const key = this.toKey(numero);
+      const stLocal = estadoUsuarios.get(key) || estadoUsuarios.get(numero);
+
+      if (tipo === 'text' && stLocal?.capturandoPrecio && !stLocal?.conversacionFinalizada) {
+        const monto = this.parseMonto(texto || '');
+        if (monto === null) {
+          await this.enviarMensajeTexto(numero, '❌ No pude leer el valor. Intenta de nuevo, ejemplo: 15000 o 12.500');
+          return;
+        }
+
+        stLocal.precioTmp = monto;
+        stLocal.capturandoPrecio = false;
+        stLocal.confirmandoPrecio = true;
+        estadoUsuarios.set(key, stLocal);
+
+        await this.enviarMensajeTexto(
+          numero,
+          `🧾 *Precio detectado:* ${monto.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+        );
+
+        await axiosWhatsapp.post('/messages', {
+          messaging_product: 'whatsapp',
+          to: numero,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: { text: '¿Confirmas este valor?' },
+            action: {
+              buttons: [
+                { type: 'reply', reply: { id: 'confirmar_precio_si', title: '✅ Sí, Finalizar' } },
+                { type: 'reply', reply: { id: 'confirmar_precio_no', title: '↩️ No, reingresar' } },
+
+              ],
+            },
+          },
+        });
+
+        return; // detenemos el flujo normal hasta confirmar
+      }
+    }
+
+
     // 🔎 Detección mínima basada SOLO en el prefijo "pedido desde"
     if (tipo === 'text' && this.empiezaConPedidoDesde(texto)) {
       try {
@@ -784,12 +832,11 @@ export class ChatbotService {
 
       // 🚀 Envía la imagen de saludo primero
       const urlImagen = `${urlImagenConstants.urlImg}`;
-      const saludo = `🚀 Hola *${String(nombre)}*, ¡Bienvenido al futuro con *DOMICILIOS W*!  
+const saludo = `🚀 ${String(nombre)} Bienvenido al futuro con *DomiciliosW.com*  
 
-🤖 Ahora nuestra central no es humana, es un ✨ChatBot inteligente que recibe y procesa tus pedidos directamente con tu domiciliario.  
+🤖 Tu pedido ahora lo recibe un ChatBot inteligente y lo envía directo a tu domiciliario.  
 
-🛵💨 Pide tu servicio ingresando a nuestra *página web*:  
-🌐 https://domiciliosw.com`;
+🛵💨 Pide fácil en 👉 https://domiciliosw.com`;
 
 
       await this.enviarMensajeImagenPorId(numero, urlImagen, saludo);
@@ -1084,14 +1131,13 @@ Gracias por tu entrega y compromiso 👏
 
 
       if (id === 'fin_domi') {
-        const st = estadoUsuarios.get(numero);
+        const st = estadoUsuarios.get(numero) || {};
         const conversacionId = st?.conversacionId;
         if (!conversacionId) {
           await this.enviarMensajeTexto(numero, '⚠️ No encontré una conversación activa para finalizar.');
           return;
         }
 
-        // Solo el domi puede solicitar finalizar
         const conversacion = await this.conversacionRepo.findOne({ where: { id: conversacionId } });
         if (!conversacion) {
           await this.enviarMensajeTexto(numero, '⚠️ No se encontró la conversación en el sistema.');
@@ -1102,25 +1148,20 @@ Gracias por tu entrega y compromiso 👏
           return;
         }
 
-        // ✅ Mostrar confirmación SÍ/NO
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: numero,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: '¿Seguro que deseas finalizar el pedido?' },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: 'confirmar_fin_si', title: '✅ Sí, finalizar' } },
-                { type: 'reply', reply: { id: 'confirmar_fin_no', title: '↩️ No, continuar' } },
-              ],
-            },
-          },
-        });
+        // Paso 1: pedimos el valor
+        const s = estadoUsuarios.get(numero) || {};
+        s.capturandoPrecio = true;
+        s.confirmandoPrecio = false;
+        s.precioTmp = undefined;
+        estadoUsuarios.set(numero, s);
 
+        await this.enviarMensajeTexto(
+          numero,
+          '💰 *Escribe el valor total cobrado al cliente* (ej: 15000, $ 15.000 o 12.500).'
+        );
         return;
       }
+
 
 
 
@@ -1144,6 +1185,13 @@ Gracias por tu entrega y compromiso 👏
 
       if (id === 'confirmar_fin_si') {
         const st = estadoUsuarios.get(numero);
+
+        const s = estadoUsuarios.get(numero) || {};
+        if (s?.capturandoPrecio || s?.confirmandoPrecio) {
+          await this.enviarMensajeTexto(numero, '💡 Primero confirma el *precio* para poder finalizar.');
+          return;
+        }
+
         const conversacionId = st?.conversacionId;
         if (!conversacionId) {
           await this.enviarMensajeTexto(numero, '⚠️ No encontré una conversación activa para finalizar.');
@@ -1173,6 +1221,67 @@ Gracias por tu entrega y compromiso 👏
         await this.enviarBotonFinalizarAlDomi(numero);
         return;
       }
+
+      if (id === 'confirmar_precio_no') {
+        const s = estadoUsuarios.get(numero) || {};
+        s.capturandoPrecio = true;
+        s.confirmandoPrecio = false;
+        s.precioTmp = undefined;
+        estadoUsuarios.set(numero, s);
+
+        await this.enviarMensajeTexto(numero, '✍️ Escribe nuevamente el valor total (ej: 15000 o 12.500).');
+        return;
+      }
+
+      if (id === 'confirmar_precio_si') {
+        const s = estadoUsuarios.get(numero) || {};
+        const conversacionId = s?.conversacionId;
+
+        if (!conversacionId || typeof s?.precioTmp !== 'number') {
+          await this.enviarMensajeTexto(numero, '⚠️ No encontré el precio o la conversación para finalizar.');
+          return;
+        }
+
+        // Verificar que realmente sea el domi de esta conversación
+        const conv = await this.conversacionRepo.findOne({ where: { id: conversacionId } });
+        if (!conv) {
+          await this.enviarMensajeTexto(numero, '⚠️ No se encontró la conversación en el sistema.');
+          return;
+        }
+        if (numero !== conv.numero_domiciliario) {
+          await this.enviarMensajeTexto(numero, '⛔ Solo el domiciliario puede finalizar este pedido.');
+          return;
+        }
+
+        // Guardar precio en BD
+        try {
+          const numeroKey = this.toKey(numero);
+          await this.precioRepo.save({
+            numero_domiciliario: numeroKey,
+            costo: s.precioTmp.toFixed(2),
+            // fecha se crea automáticamente (CreateDateColumn)
+          });
+        } catch (e) {
+          this.logger.error(`❌ Error guardando precio: ${e instanceof Error ? e.message : e}`);
+          await this.enviarMensajeTexto(numero, '⚠️ No pude guardar el precio. Intenta confirmar nuevamente.');
+          return;
+        }
+
+        // Limpiar flags y marcar que ya podemos finalizar
+        s.confirmandoPrecio = false;
+        s.capturandoPrecio = false;
+        s.conversacionFinalizada = true; // evita reentradas
+        estadoUsuarios.set(numero, s);
+        const monto = s.precioTmp;
+
+        // Ahora sí: finalizar conversación
+        const { ok, msg } = await this.finalizarConversacionPorDomi(conversacionId, monto);
+        if (!ok) {
+          await this.enviarMensajeTexto(numero, `❌ No fue posible finalizar: ${msg || 'Error desconocido'}`);
+        }
+        return;
+      }
+
 
 
       if (id === 'cambiar_a_disponible' || id === 'cambiar_a_no_disponible') {
@@ -2098,9 +2207,13 @@ Gracias por tu entrega y compromiso 👏
       case 0: {
         await this.enviarMensajeTexto(
           numero,
-          '💰 Para realizar un pago, primero debemos *recoger el dinero*.\n\n' +
-          '📍 Envíame *en un solo mensaje* la *dirección de recogida* y el *teléfono* de contacto.\n\n'
+          '💰 Para realizar un pago, primero debemos recoger el dinero y las facturas.\n' +
+          '( Enviar la información en un solo mensaje )\n\n' +
+          '📍Dirección de RECOGER:\n' +
+          '📞 Teléfono:\n\n' +
+          '( Si el pago es mayor a 200,000 por tu seguridad y confianza escribir al 314 242 3130 )'
         );
+
         estado.paso = 1;
         break;
       }
@@ -2789,120 +2902,127 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
 
 
-private async finalizarConversacionPorDomi(conversacionId: number) {
-  const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
-  if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
-  if (conv.estado === 'finalizada') return { ok: true }; // idempotente
+  private async finalizarConversacionPorDomi(conversacionId: number, monto?: number) {
+    const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
+    if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
+    if (conv.estado === 'finalizada') return { ok: true }; // idempotente
 
-  const cliente = conv.numero_cliente;
-  const domi    = conv.numero_domiciliario;
+    const cliente = conv.numero_cliente;
+    const domi = conv.numero_domiciliario;
 
-  // Helpers locales
-  const norm = (n?: string) => (String(n || '').replace(/\D/g, ''));
-  const variants = (n?: string) => {
-    const d = norm(n);
-    const ten = d.slice(-10);
-    const v = new Set<string>();
-    if (!ten) return v;
-    v.add(ten);
-    v.add(`57${ten}`);
-    v.add(`+57${ten}`);
-    v.add(d);
-    return v;
-  };
-  const clearAllFor = (num?: string) => {
-    for (const v of variants(num)) {
-      // estado en memoria
-      const st = estadoUsuarios.get(v);
-      if (st) {
-        delete st.conversacionId;
-        delete st.flujoActivo;
-        delete st.awaitingEstado;
-        delete st.awaitingEstadoExpiresAt;
-        delete st.soporteActivo;
-        delete st.soporteConversacionId;
-        delete st.soporteAsesor;
-        delete st.soporteCliente;
-        delete st.pedidoId;
-        estadoUsuarios.delete(v);
+    // Helpers locales
+    const norm = (n?: string) => (String(n || '').replace(/\D/g, ''));
+    const variants = (n?: string) => {
+      const d = norm(n);
+      const ten = d.slice(-10);
+      const v = new Set<string>();
+      if (!ten) return v;
+      v.add(ten);
+      v.add(`57${ten}`);
+      v.add(`+57${ten}`);
+      v.add(d);
+      return v;
+    };
+    const clearAllFor = (num?: string) => {
+      for (const v of variants(num)) {
+        // estado en memoria
+        const st = estadoUsuarios.get(v);
+        if (st) {
+          delete st.conversacionId;
+          delete st.flujoActivo;
+          delete st.awaitingEstado;
+          delete st.awaitingEstadoExpiresAt;
+          delete st.soporteActivo;
+          delete st.soporteConversacionId;
+          delete st.soporteAsesor;
+          delete st.soporteCliente;
+          delete st.pedidoId;
+          estadoUsuarios.delete(v);
+        }
+        // timers
+        if (temporizadoresInactividad.has(v)) {
+          clearTimeout(temporizadoresInactividad.get(v)!);
+          temporizadoresInactividad.delete(v);
+        }
+        if (temporizadoresEstado.has(v)) {
+          clearTimeout(temporizadoresEstado.get(v)!);
+          temporizadoresEstado.delete(v);
+        }
+        if (bloqueoMenu.has(v)) {
+          clearTimeout(bloqueoMenu.get(v)!);
+          bloqueoMenu.delete(v);
+        }
       }
-      // timers
-      if (temporizadoresInactividad.has(v)) {
-        clearTimeout(temporizadoresInactividad.get(v)!);
-        temporizadoresInactividad.delete(v);
-      }
-      if (temporizadoresEstado.has(v)) {
-        clearTimeout(temporizadoresEstado.get(v)!);
-        temporizadoresEstado.delete(v);
-      }
-      if (bloqueoMenu.has(v)) {
-        clearTimeout(bloqueoMenu.get(v)!);
-        bloqueoMenu.delete(v);
-      }
-    }
-  };
+    };
 
-  // Mensajes (no bloquean el cierre si fallan)
-  try {
-    await this.enviarMensajeTexto(
-      domi,
-      `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+    // Mensajes (no bloquean el cierre si fallan)
+    try {
+      await this.enviarMensajeTexto(
+        domi,
+        `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
 Gracias por tu entrega y compromiso 👏
 
 👉 *Ahora elige tu estado:*`
-    );
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: domi,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: 'Cambia tu disponibilidad:' },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-            { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-          ],
+      );
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: domi,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: 'Cambia tu disponibilidad:' },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+            ],
+          },
         },
-      },
-    });
-  } catch (e: any) {
-    this.logger.warn(`⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e}`);
+      });
+    } catch (e: any) {
+      this.logger.warn(`⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e}`);
+    }
+
+    try {
+      // 👇 línea opcional con el valor si viene definido
+      const montoLinea =
+        (typeof monto === 'number' && Number.isFinite(monto))
+          ? `\n💵 *Valor del domicilio:* ${Math.round(monto).toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })}`
+          : '';
+
+      const mensajeCliente = [
+        '✅ Gracias por confiar en nuestro servicio',
+        'TU PEDIDO HA SIDO FINALIZADO CON ÉXITO.',
+        montoLinea, // 👈 se agrega aquí
+        '',
+        '📲 Para mayor seguridad y transparencia escríbenos siempre al',
+        '313 408 9563',
+        'domiciliosw.com',
+        '',
+        '',
+        '📞 Quejas, reclamos y afiliaciones: 314 242 3130 – Wilber Álvarez'
+      ].join('\n');
+
+      await this.enviarMensajeTexto(cliente, mensajeCliente);
+    } catch (e: any) {
+      this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
+    }
+    // Persistencia: cerrar conversación SIEMPRE
+    conv.estado = 'finalizada';
+    conv.fecha_fin = new Date();
+    try {
+      await this.conversacionRepo.save(conv);
+    } catch (e: any) {
+      this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
+      // seguimos con limpieza en memoria igualmente
+    }
+
+    // Limpieza en memoria/timers (todas las variantes de número)
+    clearAllFor(cliente);
+    clearAllFor(domi);
+
+    return { ok: true };
   }
-
-  try {
-    const mensajeCliente = [
-      '✅ Gracias por confiar en nuestro servicio',
-      'TU PEDIDO HA SIDO FINALIZADO CON ÉXITO.',
-      '',
-      '📲 Para mayor seguridad y transparencia escríbenos siempre al',
-      '313 408 9563',
-      'domiciliosw.com',
-      '',
-      '',
-      '📞 Quejas, reclamos y afiliaciones: 314 242 3130 – Wilber Álvarez'
-    ].join('\n');
-    await this.enviarMensajeTexto(cliente, mensajeCliente);
-  } catch (e: any) {
-    this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
-  }
-
-  // Persistencia: cerrar conversación SIEMPRE
-  conv.estado = 'finalizada';
-  conv.fecha_fin = new Date();
-  try {
-    await this.conversacionRepo.save(conv);
-  } catch (e: any) {
-    this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
-    // seguimos con limpieza en memoria igualmente
-  }
-
-  // Limpieza en memoria/timers (todas las variantes de número)
-  clearAllFor(cliente);
-  clearAllFor(domi);
-
-  return { ok: true };
-}
 
 
 
@@ -3002,6 +3122,34 @@ Gracias por tu entrega y compromiso 👏
   private esStickerRapido(sha?: string): boolean {
     if (!sha) return false;
     return STICKERS_RAPIDOS.has(sha);
+  }
+
+
+  // Normaliza a clave 57 + 10 dígitos
+  private toKey(n: string) {
+    const d = String(n || '').replace(/\D/g, '');
+    const ten = d.slice(-10);
+    return ten ? `57${ten}` : d;
+  }
+
+  // Lee un monto desde texto: soporta 15000, 15.000, $ 12.500, 12,5 etc.
+  private parseMonto(raw?: string): number | null {
+    if (!raw) return null;
+    let t = String(raw).trim();
+    t = t.replace(/[^\d.,]/g, ''); // deja solo dígitos/coma/punto
+
+    const lastComma = t.lastIndexOf(',');
+    const lastDot = t.lastIndexOf('.');
+    if (lastComma > lastDot) {
+      // coma decimal → quitar puntos (miles) y cambiar coma por punto
+      t = t.replace(/\./g, '').replace(',', '.');
+    } else {
+      // punto decimal → quitar comas (miles)
+      t = t.replace(/,/g, '');
+    }
+
+    const n = Number(t);
+    return Number.isFinite(n) && n >= 0 ? n : null;
   }
 
 }
