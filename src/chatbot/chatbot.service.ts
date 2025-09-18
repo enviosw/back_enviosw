@@ -1427,11 +1427,21 @@ Gracias por tu entrega y compromiso 👏
           const partes: string[] = [];
           partes.push('📦 *Nuevo pedido disponible*', '');
 
+          partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio').replace('opcion_', '')}`);
+
+          if (datos.listaCompras) {
+            const listaRaw = String(datos.listaCompras).trim().replace(/\r\n?/g, '\n');
+            const listaFmt = /\n/.test(listaRaw) ? listaRaw : listaRaw.replace(/,\s*/g, '\n');
+            partes.push('🛒 *Lista de compras:*\n' + listaFmt);
+            partes.push('');
+          }
+
           if (datos.direccionRecoger) {
             partes.push(`📍 *Recoger en:*\n${datos.direccionRecoger}`);
             partes.push(`\n📞 *Tel:*\n${datos.telefonoRecoger || ''}`);
             partes.push('');
           }
+
 
           const entregarDir = datos.direccionEntregar || datos.direccionEntrega;
           const telEntregar = datos.telefonoEntregar || datos.telefonoEntrega;
@@ -1441,14 +1451,7 @@ Gracias por tu entrega y compromiso 👏
             partes.push('');
           }
 
-          if (datos.listaCompras) {
-            const listaRaw = String(datos.listaCompras).trim().replace(/\r\n?/g, '\n');
-            const listaFmt = /\n/.test(listaRaw) ? listaRaw : listaRaw.replace(/,\s*/g, '\n');
-            partes.push('🛒 *Lista de compras:*\n' + listaFmt);
-            partes.push('');
-          }
 
-          partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio').replace('opcion_', '')}`);
 
           const bodyTexto = sanearBody(partes.join('\n'));
 
@@ -1986,222 +1989,301 @@ Gracias por tu entrega y compromiso 👏
   // - Extrae dirección y teléfono con this.extraerDireccionYTelefono(mensaje)
   // - Soporta cuando el usuario manda TODO en un solo mensaje (paso 1)
   // - En paso 2 también acepta si reenvía lista + entrega otra vez
-  async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
-    const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_2' };
+async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
+  const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_2' };
 
-    // Helper para detectar si un texto parece “lista de compras”
-    const esLista = (txt: string) => {
-      if (!txt) return false;
-      const lines = txt.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      if (lines.length === 0) return false;
-      // Heurísticas simples: líneas que empiezan con guion o con cantidad (número)
-      const score = lines.reduce((acc, line) => {
-        if (/^[-•*]\s*\S+/.test(line)) return acc + 1;
-        if (/^\d+(\s|x|un|una|dos|tres|cuatro|cinco)\b/i.test(line)) return acc + 1;
-        return acc;
-      }, 0);
-      return score >= Math.max(1, Math.floor(lines.length * 0.3)); // al menos 30% de líneas parecen items
-    };
+  // ======================
+  // Helpers robustos
+  // ======================
 
-    // Intenta separar una “lista” del bloque “entrega (dirección+tel)” cuando vienen juntos.
-    // Estrategia: si el texto contiene una secuencia de ≥7 dígitos (tel) lo tratamos como que incluye entrega.
-    const separarListaYEntrega = (txt: string): { lista?: string; direccion?: string | null; telefono?: string | null } => {
-      if (!txt?.trim()) return {};
-      const tieneTel = /\d{7,}/.test(txt);
-      if (!tieneTel) {
-        // No hay teléfono: si parece lista, la devolvemos como lista y sin entrega.
-        return { lista: txt.trim(), direccion: null, telefono: null };
-      }
+  // 1) Heurística flexible de “lista de compras”
+  const esLista = (txt: string) => {
+    if (!txt) return false;
+    const raw = txt.trim();
 
-      // Si hay teléfono, primero intentamos extraer (dirección+tel) del FINAL del mensaje:
-      // Buscamos la ÚLTIMA coincidencia de teléfono y nos quedamos con un “bloque final” que parezca entrega.
-      const matchAll = txt.match(/\d{7,}/g);
-      const tel = matchAll ? matchAll[matchAll.length - 1] : null;
-      if (!tel) return { lista: txt.trim(), direccion: null, telefono: null };
+    // Si hay 3+ saltos de línea, muy probablemente es una lista
+    const nlCount = (raw.match(/\r?\n/g) || []).length;
+    if (nlCount >= 3) return true;
 
-      // Partimos por el último teléfono hacia el final
-      const idxTel = txt.lastIndexOf(tel);
-      const cabeza = txt.slice(0, idxTel);        // posible lista
-      const cola = (txt.slice(idxTel) || '').trim(); // teléfono + (posible dirección alrededor)
+    // Ítems por líneas
+    const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const scoreLineas = lines.reduce((acc, line) => {
+      // viñetas o cantidad + producto
+      if (/^[-•*]\s*\S+/.test(line)) return acc + 1;
+      if (/^\d+(\s|x|un|una|dos|tres|cuatro|cinco)\b/i.test(line)) return acc + 1;
+      // "producto, producto, producto"
+      if (/,/.test(line) && line.split(',').map(s => s.trim()).filter(s => s.length >= 2).length >= 2) return acc + 1;
+      return acc;
+    }, 0);
 
-      // Reconstruimos “bloque entrega” reinsertando el tel y tomando un poco de contexto antes del tel
-      const contextoAntes = cabeza.slice(Math.max(0, cabeza.length - 100)); // últimos 100 chars de “cabeza”
-      const candidatoEntrega = `${contextoAntes} ${cola}`.trim();
+    if (scoreLineas >= Math.max(1, Math.floor(lines.length * 0.3))) return true;
 
-      // Intentamos extraer dirección+tel del candidato
-      const { direccion, telefono } = this.extraerDireccionYTelefono(candidatoEntrega);
-
-      // Si logramos extraer una dirección decente, consideramos el resto (cabeza sin el contexto) como lista
-      if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
-        const listaPosible = cabeza.slice(0, Math.max(0, cabeza.length - contextoAntes.length)).trim();
-        const listaFinal = esLista(listaPosible) ? listaPosible : txt.trim(); // fallback: todo como lista si no pasa heurística
-        return { lista: listaFinal, direccion, telefono };
-      }
-
-      // Si no se pudo separar, lo tratamos como lista solamente
-      return { lista: txt.trim(), direccion: null, telefono: null };
-    };
-
-    switch (estado.paso) {
-      case 0: {
-        await this.enviarMensajeTexto(
-          numero,
-          '🛍️ Por favor, envíame tu *lista completa de compras* en un solo mensaje.\n\n' +
-          '👉 Incluye *cantidad* y *producto* por línea.\n' +
-          '✅ Ejemplo:\n' +
-          '- 2 Panes integrales\n' +
-          '- 1 Arroz x 500g\n' +
-          '- 3 Jugos de naranja\n\n');
-        estado.paso = 1;
-        break;
-      }
-
-      case 1: {
-        if (!mensaje?.trim()) return;
-
-        // Tolerar que el cliente mande *lista + entrega* en un solo mensaje
-        const { lista, direccion, telefono } = separarListaYEntrega(mensaje);
-
-        // Guardamos la lista si existe y pasa heurística; si no, guardamos “tal cual”
-        const listaOk = lista && esLista(lista);
-        estado.datos.listaCompras = listaOk ? lista!.trim() : mensaje.trim(); // fallback: todo el mensaje
-
-        if (direccion && direccion.length >= 5 && telefono && /^\d{7,}$/.test(telefono)) {
-          // Ya vino con datos de entrega: guardamos y saltamos directo a confirmación
-          estado.datos.direccionEntrega = direccion;
-          estado.datos.direccionEntregar = direccion; // compat
-          estado.datos.telefonoEntrega = telefono;
-          estado.datos.telefonoEntregar = telefono;   // compat
-
-          if (!estado.confirmacionEnviada) {
-            const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
-            await this.enviarMensajeTexto(
-              numero,
-              `🧾 Esta es la compra que solicitaste:\n\n` +
-              `📦 *Lista de compras:*\n${listaCompras}\n\n` +
-              `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
-              `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
-            );
-
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿La información es correcta?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
-                    { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
-                  ],
-                },
-              },
-            });
-
-            estado.confirmacionEnviada = true;
-            estado.paso = 3;
-            break;
-          }
-
-          // Si por alguna razón ya estaba enviada, no repetir
-          break;
-        }
-
-        // Si NO vino entrega aún, pedimos dirección + teléfono en un solo mensaje
-        await this.enviarMensajeTexto(
-          numero,
-          '📦 Ahora envíame *en un solo mensaje* la *dirección de entrega* y el *teléfono de quien recibe*.\n\n' +
-          '✍️ Escríbelo así (un solo texto):\n' +
-          '📍 Dirección, detalle / Apto / Piso - 📞 Teléfono 313*******\n\n'
-        );
-        estado.paso = 2;
-        break;
-      }
-
-      case 2: {
-        if (!mensaje?.trim()) return;
-
-        // Evitar repetición del resumen y botones
-        if (estado.confirmacionEnviada) break;
-
-        // Tolerar que aquí el usuario reenvíe *lista + entrega* otra vez
-        const { lista, direccion, telefono } = separarListaYEntrega(mensaje);
-
-        // Si detectamos una lista y todavía no hay lista guardada, aprovechamos
-        if (lista && esLista(lista) && !estado.datos.listaCompras) {
-          estado.datos.listaCompras = lista.trim();
-        }
-
-        // Validamos dirección/teléfono
-        if (!direccion || direccion.length < 5) {
-          await this.enviarMensajeTexto(
-            numero,
-            '⚠️ No logré detectar una *dirección* válida. Por favor envíame *dirección y teléfono juntos en un solo mensaje*.\n\n'
-          );
-          return;
-        }
-
-        if (!telefono || !/^\d{7,}$/.test(telefono)) {
-          await this.enviarMensajeTexto(
-            numero,
-            '⚠️ No logré detectar un *teléfono* válido (mínimo 7 dígitos). ' +
-            'Por favor reenvía *dirección y teléfono juntos en un solo mensaje*.\n\n'
-          );
-          return;
-        }
-
-        // Guardamos ya separados (incluye claves de compatibilidad)
-        estado.datos.direccionEntrega = direccion;
-        estado.datos.direccionEntregar = direccion;
-        estado.datos.telefonoEntrega = telefono;
-        estado.datos.telefonoEntregar = telefono;
-
-        const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
-
-        await this.enviarMensajeTexto(
-          numero,
-          `🧾 Esta es la compra que solicitaste:\n\n` +
-          `📦 *Lista de compras:*\n${listaCompras}\n\n` +
-          `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
-          `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
-        );
-
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: numero,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: '¿La información es correcta?' },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
-                { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
-              ],
-            },
-          },
-        });
-
-        estado.confirmacionEnviada = true;
-        estado.paso = 3;
-        break;
-      }
-
-      case 3:
-        // Esperamos respuesta de los botones (confirmar_compra / editar_compra)
-        break;
-
-      default: {
-        await this.enviarMensajeTexto(numero, '❗ Algo salió mal. Reiniciamos el proceso.');
-        estadoUsuarios.delete(numero);
-        await this.opcion2PasoAPaso(numero, '');
-        return;
-      }
+    // Lista de una sola línea separada por comas
+    if (lines.length === 1) {
+      const items = raw.split(',').map(s => s.trim()).filter(Boolean);
+      if (items.length >= 3) return true;
     }
 
-    estadoUsuarios.set(numero, estado); // Guardar cambios en memoria
+    return false;
+  };
+
+  // 2) Pistas típicas de dirección (LATAM/CO); ajusta según tu zona
+  const pistaDireccion = /(calle|cll\.?|cra\.?|carrera|kr\.?|kra\.?|avenida|av\.?|avda\.?|diag\.?|diagonal|transv\.?|transversal|#|mz\.?|manzana|barrio|sector|torre|bloque|interior|int\.?|apto|apt\.?|apartment|piso|oficina|ofi\.?)/i;
+
+  // 3) Extrae teléfono (7+ dígitos contiguos). Si hay varios, usa el último.
+  const extraerTelefono = (txt: string): string | null => {
+    const all = txt.match(/\d{7,}/g);
+    return all?.length ? all[all.length - 1] : null;
+  };
+
+  // 4) ¿El bloque tiene señales fuertes de dirección?
+  const tieneDireccionClara = (txt: string) => {
+    if (!txt?.trim()) return false;
+    const hayPista = pistaDireccion.test(txt);
+    const hayNumero = /\d/.test(txt);
+    const hayTelMarca = /(tel\.?|t[ée]l\.?|cel\.?|whats?app)/i.test(txt) || /\d{7,}/.test(txt);
+    // Requerimos pista + (número o marca de teléfono)
+    return hayPista && (hayNumero || hayTelMarca);
+  };
+
+  // 5) Extrae dirección únicamente si hay señales fuertes. Quita teléfono si está.
+  const extraerDireccion = (txt: string): string | null => {
+    if (!tieneDireccionClara(txt)) return null;
+
+    const tel = extraerTelefono(txt);
+    const sinTel = tel ? txt.replace(new RegExp(tel, 'g'), '').trim() : txt.trim();
+
+    // Cortar por separadores comunes para aislar el segmento “dirección”
+    const candidates = sinTel
+      .split(/\r?\n| - |\s{2,}|, ?(Tel\.?|T[ée]l\.?|Cel\.?|Whats?app):?/i)
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    // Preferir candidatos con pista de dirección y longitud suficiente
+    const preferidos = candidates
+      .filter(c => pistaDireccion.test(c) && c.length >= 5)
+      .sort((a, b) => b.length - a.length);
+
+    if (preferidos.length) return preferidos[0];
+
+    // Si no hubo preferidos, no arriesgar una falsa dirección
+    return null;
+  };
+
+  // 6) Separar lista y entrega, priorizando NUNCA confundir lista con dirección
+  const separarListaYEntrega = (txt: string): { lista?: string; direccion?: string | null; telefono?: string | null } => {
+    if (!txt?.trim()) return {};
+    const mensajePareceLista = esLista(txt);
+
+    // Si parece lista y NO hay señales fuertes de dirección ni teléfono, devolvemos solo lista
+    if (mensajePareceLista && !tieneDireccionClara(txt) && !/\d{7,}/.test(txt)) {
+      return { lista: txt.trim(), direccion: null, telefono: null };
+    }
+
+    // Si hay señales de entrega, intentamos separar
+    const telefono = extraerTelefono(txt);
+    const direccion = extraerDireccion(txt);
+
+    // Intentar “limpiar” la lista quitando líneas que contengan la dirección y/o el teléfono
+    let lista: string | undefined;
+    const lines = txt.split(/\r?\n/);
+    const cleanLines = lines.filter(l => {
+      if (!l.trim()) return false;
+      if (telefono && l.includes(telefono)) return false;
+      if (direccion && l.toLowerCase().includes(direccion.toLowerCase())) return false;
+      if (/(tel\.?|t[ée]l\.?|cel\.?|whats?app)/i.test(l)) return false;
+      return true;
+    });
+    const candidatoLista = cleanLines.join('\n').trim();
+
+    // Si el “resto” parece lista o si el mensaje original parecía lista, la tomamos
+    if (esLista(candidatoLista) || mensajePareceLista) {
+      lista = (candidatoLista || txt).trim();
+    }
+
+    return {
+      lista,
+      direccion: direccion ?? null,
+      telefono: telefono ?? null,
+    };
+  };
+
+  // 7) Prompt dinámico pidiendo lo que falte (soporta envíos por separado)
+  const pedirFaltante = async () => {
+    const tieneDir = !!estado.datos.direccionEntrega;
+    const tieneTel = !!estado.datos.telefonoEntrega;
+    if (!tieneDir && !tieneTel) {
+      await this.enviarMensajeTexto(
+        numero,
+        '📦 Ahora envíame *la dirección de entrega* y el *teléfono de quien recibe*. ' +
+        'Puedes enviarlos *juntos o por separado*.\n\n' +
+        '✍️ Ejemplo (juntos):\n' +
+        '📍 Calle 123 #45-67 Apto 501 - 📞 3131234567\n\n' +
+        'Si lo prefieres, primero envía la *dirección* y luego el *teléfono*.'
+      );
+    } else if (!tieneDir) {
+      await this.enviarMensajeTexto(
+        numero,
+        '📍 Me falta la *dirección de entrega*. Por favor envíala. Puedes incluirla con el teléfono si quieres.'
+      );
+    } else if (!tieneTel) {
+      await this.enviarMensajeTexto(
+        numero,
+        '📞 Me falta el *teléfono de quien recibe* (mínimo 7 dígitos). Por favor envíalo.'
+      );
+    }
+  };
+
+  // ======================
+  // Flujo conversacional
+  // ======================
+  switch (estado.paso) {
+    case 0: {
+      await this.enviarMensajeTexto(
+        numero,
+        '🛍️ Por favor, envíame tu *lista completa de compras*. ' +
+        'La lista es *independiente* de la dirección/teléfono: puedes enviarla como quieras (viñetas, líneas o comas).\n\n' +
+        '👉 Idealmente, incluye *cantidad* y *producto* por línea.\n' +
+        '✅ Ejemplo:\n' +
+        '- 2 Panes integrales\n' +
+        '- 1 Arroz x 500g\n' +
+        '- 3 Jugos de naranja\n\n'
+      );
+      estado.paso = 1;
+      break;
+    }
+
+    case 1: {
+      if (!mensaje?.trim()) break;
+
+      // Acepta "lista sola" o "lista + entrega (parcial o completa)"
+      const { lista, direccion, telefono } = separarListaYEntrega(mensaje);
+
+      // La lista de compras es INDEPENDIENTE: siempre guardamos lo que parezca lista,
+      // y si no pasa heurística, guardamos el mensaje entero como lista (como venga).
+      const listaOk = lista && esLista(lista);
+      estado.datos.listaCompras = (listaOk ? lista!.trim() : mensaje.trim());
+
+      // Guardar entrega parcial/total si vino algo
+      if (direccion) {
+        estado.datos.direccionEntrega = direccion;
+        estado.datos.direccionEntregar = direccion; // compat
+      }
+      if (telefono && /^\d{7,}$/.test(telefono)) {
+        estado.datos.telefonoEntrega = telefono;
+        estado.datos.telefonoEntregar = telefono; // compat
+      }
+
+      // Si ya tenemos ambos, vamos directo a confirmar
+      if (estado.datos.direccionEntrega && estado.datos.telefonoEntrega) {
+        if (!estado.confirmacionEnviada) {
+          const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
+          await this.enviarMensajeTexto(
+            numero,
+            `🧾 Esta es la compra que solicitaste:\n\n` +
+            `📦 *Lista de compras:*\n${listaCompras}\n\n` +
+            `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
+            `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
+          );
+
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: numero,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: '¿La información es correcta?' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
+                  { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+                ],
+              },
+            },
+          });
+
+          estado.confirmacionEnviada = true;
+          estado.paso = 3;
+          break;
+        }
+        break;
+      }
+
+      // Si falta alguno, pedimos lo que falte y pasamos a paso 2
+      estado.paso = 2;
+      await pedirFaltante();
+      break;
+    }
+
+    case 2: {
+      if (!mensaje?.trim()) break;
+      if (estado.confirmacionEnviada) break; // evitar duplicado de resumen y botones
+
+      // Aquí el usuario puede mandar dirección, teléfono o ambos en cualquier orden
+      const tel2 = extraerTelefono(mensaje);
+      const dir2 = extraerDireccion(mensaje);
+
+      if (dir2) {
+        estado.datos.direccionEntrega = dir2;
+        estado.datos.direccionEntregar = dir2;
+      }
+      if (tel2 && /^\d{7,}$/.test(tel2)) {
+        estado.datos.telefonoEntrega = tel2;
+        estado.datos.telefonoEntregar = tel2;
+      }
+
+      // Si todavía falta algo, pedir específicamente lo que falte y quedarse en paso 2
+      if (!estado.datos.direccionEntrega || !estado.datos.telefonoEntrega) {
+        await pedirFaltante();
+        break;
+      }
+
+      // Ya tenemos ambos -> confirmación
+      const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
+
+      await this.enviarMensajeTexto(
+        numero,
+        `🧾 Esta es la compra que solicitaste:\n\n` +
+        `📦 *Lista de compras:*\n${listaCompras}\n\n` +
+        `📍 *Dirección de entrega:*\n${direccionEntrega}\n` +
+        `📞 *Teléfono quien recibe:*\n${telefonoEntrega}`
+      );
+
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: numero,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: '¿La información es correcta?' },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
+              { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+            ],
+          },
+        },
+      });
+
+      estado.confirmacionEnviada = true;
+      estado.paso = 3;
+      break;
+    }
+
+    case 3:
+      // Esperamos respuesta de los botones (confirmar_compra / editar_compra)
+      break;
+
+    default: {
+      await this.enviarMensajeTexto(numero, '❗ Algo salió mal. Reiniciamos el proceso.');
+      estadoUsuarios.delete(numero);
+      await this.opcion2PasoAPaso(numero, '');
+      return;
+    }
   }
+
+  estadoUsuarios.set(numero, estado); // Guardar cambios en memoria
+}
 
 
 
