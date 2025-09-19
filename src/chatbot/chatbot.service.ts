@@ -60,51 +60,67 @@ export class ChatbotService {
 
   // ⏰ Cierre por inactividad (10 min)
   // No aplica si hay conversación activa o si el pedido está confirmado / esperando asignación
-  private async reiniciarPorInactividad(numero: string) {
-    const st = estadoUsuarios.get(numero) || {};
+ // ⏰ Cierre por inactividad (10 min)
+// Cierra y limpia estado/timers. Solo NOTIFICA al cliente; si es domiciliario, cierra en silencio.
+private async reiniciarPorInactividad(numero: string) {
+  const st = estadoUsuarios.get(numero) || {};
 
-    // No cerrar si está en soporte o con pedido activo/en asignación
-    if (st?.soporteActivo) return;
-    if (st?.conversacionId) return;
-    if (st?.confirmadoPedido === true) return;
-    if (st?.esperandoAsignacion === true) return;
+  // No cerrar si está en soporte o con pedido activo/en asignación
+  if (st?.soporteActivo) return;
+  if (st?.conversacionId) return;
+  if (st?.confirmadoPedido === true) return;
+  if (st?.esperandoAsignacion === true) return;
 
-    // 🔻 Limpieza de estado en memoria
-    estadoUsuarios.delete(numero);
-
-    // ⏱️ Timer de inactividad
-    if (temporizadoresInactividad.has(numero)) {
-      clearTimeout(temporizadoresInactividad.get(numero)!);
-      temporizadoresInactividad.delete(numero);
-    }
-
-    // ⏱️ Cooldown de estado (por si existía)
-    if (temporizadoresEstado.has(numero)) {
-      clearTimeout(temporizadoresEstado.get(numero)!);
-      temporizadoresEstado.delete(numero);
-    }
-
-    // 🔒 Bloqueo de menú (por si estaba activo)
-    if (bloqueoMenu.has(numero)) {
-      clearTimeout(bloqueoMenu.get(numero)!);
-      bloqueoMenu.delete(numero);
-    }
-
-    // (Opcional) si normalizas números, asegúrate de usar SIEMPRE el mismo formato para las claves
-
-    try {
-      await this.enviarMensajeTexto(numero, '🚨');
-      const cierre = [
-        '📕✨ *El chat se cerró automáticamente por inactividad*',
-        '👉 ¡Pero aquí sigo listo para ayudarte!',
-        '',
-        'Escribe *Hola* y volvemos a empezar un nuevo chat 🚀💬'
-      ].join('\n');
-      await this.enviarMensajeTexto(numero, cierre);
-    } catch (e: any) {
-      this.logger.error(`❌ Error notificando cierre por inactividad a ${numero}: ${e?.message || e}`);
-    }
+  // ¿Es domiciliario? (si falla la consulta, asumimos que NO lo es para no silenciar por error)
+  let esDomiciliario = false;
+  try {
+    esDomiciliario = await this.domiciliarioService.esDomiciliario(numero);
+  } catch {
+    esDomiciliario = false;
   }
+
+  // 🔻 Limpieza de estado en memoria
+  estadoUsuarios.delete(numero);
+
+  // ⏱️ Timer de inactividad
+  if (temporizadoresInactividad.has(numero)) {
+    clearTimeout(temporizadoresInactividad.get(numero)!);
+    temporizadoresInactividad.delete(numero);
+  }
+
+  // ⏱️ Cooldown de estado (por si existía)
+  if (temporizadoresEstado.has(numero)) {
+    clearTimeout(temporizadoresEstado.get(numero)!);
+    temporizadoresEstado.delete(numero);
+  }
+
+  // 🔒 Bloqueo de menú (por si estaba activo)
+  if (bloqueoMenu.has(numero)) {
+    clearTimeout(bloqueoMenu.get(numero)!);
+    bloqueoMenu.delete(numero);
+  }
+
+  // 🔕 Si es domiciliario: cierre silencioso (no notificar)
+  if (esDomiciliario) {
+    this.logger.log(`🔕 Chat cerrado por inactividad (silencioso) para domiciliario ${numero}.`);
+    return;
+  }
+
+  // 📣 Si es cliente: notificar cierre
+  try {
+    await this.enviarMensajeTexto(numero, '🚨');
+    const cierre = [
+      '📕✨ *El chat se cerró automáticamente por inactividad*',
+      '👉 ¡Pero aquí sigo listo para ayudarte!',
+      '',
+      'Escribe *Hola* y volvemos a empezar un nuevo chat 🚀💬'
+    ].join('\n');
+    await this.enviarMensajeTexto(numero, cierre);
+  } catch (e: any) {
+    this.logger.error(`❌ Error notificando cierre por inactividad a ${numero}: ${e?.message || e}`);
+  }
+}
+
 
 
 
