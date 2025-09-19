@@ -2921,115 +2921,152 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
 
   // 🚀 Crea el pedido con el TEXTO BRUTO en detalles_pedido y, si hay domi, crea la ventana cliente↔domi
-  private async procesarAutoPedidoDesde(numeroWhatsApp: string, textoOriginal: string, nombreContacto: string) {
-    const normalizar = (n: string) => {
-      const digits = (n || '').replace(/\D/g, '');
-      return digits.length === 10 ? `57${digits}` : digits;
-    };
+ private async procesarAutoPedidoDesde(numeroWhatsApp: string, textoOriginal: string, nombreContacto: string) {
+  const normalizar = (n: string) => {
+    const digits = (n || '').replace(/\D/g, '');
+    return digits.length === 10 ? `57${digits}` : digits;
+  };
 
-    let domiciliario: Domiciliario | null = null;
-    try {
-      domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
-    } catch {
-      domiciliario = null;
-    }
+  // Sanitizador que preserva saltos de línea y limita tamaño para WhatsApp
+  const sanearBodyMultiline = (s: string, max = 900) => {
+    let t = String(s || '')
+      .replace(/\r\n/g, '\n')     // CRLF -> LF
+      .replace(/\u00A0/g, ' ')    // NBSP -> espacio
+      .replace(/[ \t]+/g, ' ')    // colapsa espacios/tabs, NO \n
+      .replace(/\n{3,}/g, '\n\n') // máx doble salto
+      .trim();
+    return t.length > max ? t.slice(0, max - 1) + '…' : t;
+  };
 
-    const estado = domiciliario ? 5 : 0;  // 5 si hay a quién ofertar
+  let domiciliario: Domiciliario | null = null;
+  try {
+    domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
+  } catch {
+    domiciliario = null;
+  }
 
-    const telClienteNorm = normalizar(numeroWhatsApp);
-    const telDomiNorm = domiciliario ? normalizar(domiciliario.telefono_whatsapp) : null;
+  const estado = domiciliario ? 5 : 0;  // 5 si hay a quién ofertar
 
-    const pedidoCreado = await this.domiciliosService.create({
-      mensaje_confirmacion: 'Auto-ingreso (pedido desde)',
-      estado,
+  const telClienteNorm = normalizar(numeroWhatsApp);
+  const telDomiNorm = domiciliario ? normalizar(domiciliario.telefono_whatsapp) : null;
+
+  const pedidoCreado = await this.domiciliosService.create({
+    mensaje_confirmacion: 'Auto-ingreso (pedido desde)',
+    estado,
+    numero_cliente: telClienteNorm,
+    fecha: new Date().toISOString(),
+    hora: new Date().toTimeString().slice(0, 5),
+    id_cliente: null,
+    id_domiciliario: domiciliario?.id ?? null,
+    tipo_servicio: 'auto',
+    origen_direccion: '',
+    destino_direccion: '',
+    telefono_contacto_origen: '',
+    telefono_contacto_destino: '',
+    notas: '',
+    detalles_pedido: textoOriginal, // TEXTO COMPLETO, TAL CUAL
+    foto_entrega_url: '',
+  });
+
+  if (domiciliario && telDomiNorm) {
+    // Crear conversación (ventana) y conectar ambos lados
+    const conversacion = this.conversacionRepo.create({
       numero_cliente: telClienteNorm,
-      fecha: new Date().toISOString(),
-      hora: new Date().toTimeString().slice(0, 5),
-      id_cliente: null,
-      id_domiciliario: domiciliario?.id ?? null,
-      tipo_servicio: 'auto',
-      origen_direccion: '',
-      destino_direccion: '',
-      telefono_contacto_origen: '',
-      telefono_contacto_destino: '',
-      notas: '',
-      detalles_pedido: textoOriginal, // TEXTO COMPLETO, TAL CUAL
-      foto_entrega_url: '',
+      numero_domiciliario: telDomiNorm,
+      fecha_inicio: new Date(),
+      estado: 'activa',
+    });
+    await this.conversacionRepo.save(conversacion);
+
+    estadoUsuarios.set(telClienteNorm, {
+      ...(estadoUsuarios.get(telClienteNorm) || {}),
+      conversacionId: conversacion.id,
+      inicioMostrado: true,
+    });
+    estadoUsuarios.set(telDomiNorm, {
+      conversacionId: conversacion.id,
+      tipo: 'conversacion_activa',
+      inicioMostrado: true,
     });
 
-    if (domiciliario && telDomiNorm) {
-      // Crear conversación (ventana) y conectar ambos lados
-      const conversacion = this.conversacionRepo.create({
-        numero_cliente: telClienteNorm,
-        numero_domiciliario: telDomiNorm,
-        fecha_inicio: new Date(),
-        estado: 'activa',
-      });
-      await this.conversacionRepo.save(conversacion);
+    // ==========================
+    // ARME DEL MENSAJE AQUÍ MISMO (sin extras)
+    // ==========================
+    const tipo = String(pedidoCreado?.tipo_servicio || '').trim();
+    const tipoLinea = tipo ? `🔁 *Tipo de servicio:* ${tipo}` : '';
 
-      estadoUsuarios.set(telClienteNorm, {
-        ...(estadoUsuarios.get(telClienteNorm) || {}),
-        conversacionId: conversacion.id,
-        inicioMostrado: true,
-      });
-      estadoUsuarios.set(telDomiNorm, {
-        conversacionId: conversacion.id,
-        tipo: 'conversacion_activa',
-        inicioMostrado: true,
-      });
+    const recoger = pedidoCreado.origen_direccion
+      ? `📍 *Recoger en:* ${pedidoCreado.origen_direccion}\n📞 *Tel:* ${pedidoCreado.telefono_contacto_origen || '-'}`
+      : '';
 
-      const resumen = this.generarResumenPedidoDesdePedido(pedidoCreado);
+    const entregar = pedidoCreado.destino_direccion
+      ? `🏠 *Entregar en:* ${pedidoCreado.destino_direccion}\n📞 *Tel:* ${pedidoCreado.telefono_contacto_destino || '-'}`
+      : '';
 
-      // 👉 Cliente: SOLO info básica del domiciliario (sin resumen)
-      await this.enviarMensajeTexto(
-        telClienteNorm,
-        `✅ ¡Pedido asignado!\n\n` +
-        `👤 *${domiciliario.nombre} ${domiciliario.apellido}*\n` +
-        `🧥 Chaqueta: *${domiciliario.numero_chaqueta}*\n` +
-        `📞 Telefono: *${telDomiNorm}*\n\n` +
-        `💬 Ya estás conectado con el domicilario. Escribele desde aquí mismo.`
-      );
+    const listaODetalles = pedidoCreado.detalles_pedido
+      ? `🛒 *Detalles del pedido:*\n${String(pedidoCreado.detalles_pedido).trim()}`
+      : '';
 
-      // 👉 Domiciliario: TODA la información + resumen completo
-      await this.enviarMensajeTexto(
-        telDomiNorm,
-        `📦 *Nuevo pedido asignado*\n\n${resumen}\n\n` +
-        `👤 Cliente: *${nombreContacto || 'Cliente'}*\n` +
-        `📞 Telefono: ${telClienteNorm}\n\n` +
-        `✅ Ya estás conectado con el cliente. Responde aquí mismo.`
-      );
-      await this.enviarBotonFinalizarAlDomi(telDomiNorm!);
+    const resumenParaDomi = [
+      tipoLinea,
+      recoger,
+      entregar,
+      listaODetalles,  // ← NO agregamos extras (observaciones/notas), solo esto
+    ]
+      .filter(Boolean)
+      .join('\n\n'); // bloques separados por doble salto
 
-
-      // No mostramos menú porque ya hay conversación activa
-      return;
-    }
-
-    // Sin domiciliarios disponibles: queda pendiente
-    await this.enviarMensajeTexto(telClienteNorm, '🚨');
-    await this.enviarMensajeTexto(
-      telClienteNorm,
-      [
-        '✨ *Aviso importante*',
-        'En este momento *NO TENEMOS DOMICILIARIOS DISPONIBLES*',
-        '',
-        '1️⃣ Puedes *esperar* ⏱️ ~10 minutos o menos.',
-        '2️⃣ O *cancelar* el servicio.',
-      ].join('\n')
+    const cuerpoDomi = sanearBodyMultiline(
+      `📦 *Nuevo pedido asignado*\n\n${resumenParaDomi}\n\n` +
+      `👤 Cliente: *${nombreContacto || 'Cliente'}*\n` +
+      `📞 Telefono: ${telClienteNorm}\n\n` +
+      `✅ Ya estás conectado con el cliente. Responde aquí mismo.`
     );
 
-    if (pedidoCreado?.id) {
-      await this.mostrarMenuPostConfirmacion(
-        telClienteNorm,
-        pedidoCreado.id,
-        '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:'
-      );
-    }
+    // 👉 Cliente: SOLO info básica del domiciliario (sin resumen)
+    await this.enviarMensajeTexto(
+      telClienteNorm,
+      `✅ ¡Pedido asignado!\n\n` +
+      `👤 *${domiciliario.nombre} ${domiciliario.apellido}*\n` +
+      `🧥 Chaqueta: *${domiciliario.numero_chaqueta}*\n` +
+      `📞 Telefono: *${telDomiNorm}*\n\n` +
+      `💬 Ya estás conectado con el domicilario. Escríbele desde aquí mismo.`
+    );
 
-    const st = estadoUsuarios.get(telClienteNorm) || {};
-    st.esperandoAsignacion = true;
-    estadoUsuarios.set(telClienteNorm, st);
+    // 👉 Domiciliario: mensaje formateado con saltos de línea (sin extras)
+    await this.enviarMensajeTexto(telDomiNorm, cuerpoDomi);
+    await this.enviarBotonFinalizarAlDomi(telDomiNorm!);
+
+    // No mostramos menú porque ya hay conversación activa
+    return;
   }
+
+  // Sin domiciliarios disponibles: queda pendiente
+  await this.enviarMensajeTexto(telClienteNorm, '🚨');
+  await this.enviarMensajeTexto(
+    telClienteNorm,
+    [
+      '✨ *Aviso importante*',
+      'En este momento *NO TENEMOS DOMICILIARIOS DISPONIBLES*',
+      '',
+      '1️⃣ Puedes *esperar* ⏱️ ~10 minutos o menos.',
+      '2️⃣ O *cancelar* el servicio.',
+    ].join('\n')
+  );
+
+  if (pedidoCreado?.id) {
+    await this.mostrarMenuPostConfirmacion(
+      telClienteNorm,
+      pedidoCreado.id,
+      '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:'
+    );
+  }
+
+  const st = estadoUsuarios.get(telClienteNorm) || {};
+  st.esperandoAsignacion = true;
+  estadoUsuarios.set(telClienteNorm, st);
+}
+
 
 
   // ✅ Solo permitimos cancelar si el pedido sigue PENDIENTE (estado=0)
