@@ -27,7 +27,7 @@ function isExpired(ts?: number) {
 
 const ASESOR_PSQR = '573142423130';
 
-const TRIGGER_PALABRA_CLAVE = '01';
+const TRIGGER_PALABRA_CLAVE = '1';
 // 👉 Si mañana agregas más stickers, solo pon sus SHA aquí:
 const STICKERS_RAPIDOS = new Set<string>([
   String(stickerConstants.stickerChad), // sticker oficial actual
