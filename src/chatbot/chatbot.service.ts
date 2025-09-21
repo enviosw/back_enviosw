@@ -837,7 +837,9 @@ async reintentarAsignacionPendientes(): Promise<void> {
 
       // 🚀 Lista de opciones
       await this.enviarListaOpciones(numero);
-
+      
+    //QUITAR
+      await this.enviarSticker("3208729276", String(stickerConstants.stickerChad))
       return;
     }
 
