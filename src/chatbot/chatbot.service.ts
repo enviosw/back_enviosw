@@ -830,7 +830,7 @@ async reintentarAsignacionPendientes(): Promise<void> {
 🛵💨 Pide fácil en 👉 https://domiciliosw.com`;
 
     //QUITAR
-      await this.enviarSticker(numero, String(stickerConstants.stickerId))
+      // await this.enviarSticker(numero, String(stickerConstants.stickerId))
 
       await this.enviarMensajeImagenPorId(numero, urlImagen, saludo);
 
