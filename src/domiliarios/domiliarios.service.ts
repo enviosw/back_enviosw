@@ -20,34 +20,38 @@ export class DomiciliariosService {
   ) { }
 
   // 🚀 Asignar el próximo domiciliario disponible
-  async asignarDomiciliarioDisponible(): Promise<Domiciliario> {
-    return await this.dataSource.transaction(async (manager) => {
+async asignarDomiciliarioDisponible(): Promise<Domiciliario> {
+    return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(Domiciliario);
 
-      // 🔐 Bloquea fila para evitar condiciones de carrera
-      const domiciliario = await repo
+      // 1) Tomar el siguiente disponible con LOCK (el segundo concurrente esperará).
+      const domi = await repo
         .createQueryBuilder('d')
-        .setLock('pessimistic_write')
-        .where('d.estado = true AND d.disponible = true')
+        .where('d.estado = :activo AND d.disponible = :disp', { activo: true, disp: true })
         .orderBy('d.turno_orden', 'ASC')
+        .addOrderBy('d.id', 'ASC')
+        .setLock('pessimistic_write') // evita que otro hilo lo "coja" al mismo tiempo
         .getOne();
 
-      if (!domiciliario) {
+      if (!domi) {
         throw new NotFoundException('❌ No hay domiciliarios disponibles en este momento.');
       }
 
-      // 🔄 Marca como ocupado y mueve al final
-      domiciliario.disponible = false;
-
-      const { max } = await repo
+      // 2) Calcular el nuevo turno_orden de forma segura (max puede venir null/undefined).
+      const result = await repo
         .createQueryBuilder('d')
         .select('MAX(d.turno_orden)', 'max')
-        .getRawOne();
+        .getRawOne<{ max: number | null }>();
 
-      domiciliario.turno_orden = (max || 0) + 1;
+      const maxTurno = (result?.max ?? 0);
 
-      await repo.save(domiciliario);
-      return domiciliario;
+      // 3) Actualizar flags/turno y persistir dentro de la misma transacción.
+      domi.disponible = false;
+      domi.turno_orden = maxTurno + 1;
+
+      await repo.save(domi);
+
+      return domi;
     });
   }
 
