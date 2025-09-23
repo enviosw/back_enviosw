@@ -3084,7 +3084,7 @@ private async crearPedidoDesdeSticker(numeroWhatsApp: string, comercio: any, nom
   });
 
   // 7) Registrar oferta vigente en memoria (2 minutos)
-  const OFERTA_TIMEOUT_MS = 120_000;
+  const OFERTA_TIMEOUT_MS = 90_000;
   const domKey = toTelKey(domiciliario.telefono_whatsapp);
   ofertasVigentes.set(pedidoCreado.id, {
     expira: Date.now() + OFERTA_TIMEOUT_MS,
@@ -3106,6 +3106,7 @@ private async crearPedidoDesdeSticker(numeroWhatsApp: string, comercio: any, nom
         temporizadoresOferta.delete(pedidoCreado.id);
 
         this.logger.warn(`⏰ Domi no respondió. Pedido ${pedidoCreado.id} vuelve a pendiente.`);
+  await this.enviarMensajeTexto(domKey, '⏱️ Te demoraste en responder. El pedido ya no está disponible. Cambia tu estado');
 
         // Botones de estado al domi (inmediato)
         try {
@@ -3129,7 +3130,6 @@ private async crearPedidoDesdeSticker(numeroWhatsApp: string, comercio: any, nom
         }
 
         // ❌ No forzar el cron aquí para evitar reentrancia
-        this.reintentarAsignacionPendientes();
       } else {
         // Ya no estaba en 5 (lo aceptaron/rechazaron antes) → limpiar memoria por si acaso
         ofertasVigentes.delete(pedidoCreado.id);
