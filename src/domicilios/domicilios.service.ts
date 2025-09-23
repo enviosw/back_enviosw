@@ -13,7 +13,7 @@ export class DomiciliosService {
     @InjectRepository(Domicilio)
     private readonly domicilioRepo: Repository<Domicilio>,
     private readonly dataSource: DataSource,
-  ) {}
+  ) { }
 
   // =========================
   // Métodos que ya tenías
@@ -138,38 +138,38 @@ export class DomiciliosService {
    * OFERTADO (5) -> PENDIENTE (0), limpia la relación "domiciliario".
    * Devuelve true si realmente estaba ofertado y se revirtió.
    */
-async volverAPendienteSiOfertado(pedidoId: number): Promise<boolean> {
-  return this.dataSource.transaction(async (manager) => {
-    const repo = manager.getRepository(Domicilio);
+  async volverAPendienteSiOfertado(pedidoId: number): Promise<boolean> {
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Domicilio);
 
-    // Bloquea el registro del pedido
-    const pedido = await repo
-      .createQueryBuilder('d')
-      .setLock('pessimistic_write')
-      .where('d.id = :id', { id: pedidoId })
-      .getOne();
+      // Bloquea el registro del pedido
+      const pedido = await repo
+        .createQueryBuilder('d')
+        .setLock('pessimistic_write')
+        .where('d.id = :id', { id: pedidoId })
+        .getOne();
 
-    if (!pedido) return false;
-    if (pedido.estado !== 5) return false; // ya no está OFERTADO
+      if (!pedido) return false;
+      if (pedido.estado !== 5) return false; // ya no está OFERTADO
 
-    // 1) Limpia la relación mediante RelationQueryBuilder (evita asignar null a la propiedad TS)
-    await manager
-      .createQueryBuilder()
-      .relation(Domicilio, 'domiciliario')
-      .of(pedido.id)
-      .set(null);
+      // 1) Limpia la relación mediante RelationQueryBuilder (evita asignar null a la propiedad TS)
+      await manager
+        .createQueryBuilder()
+        .relation(Domicilio, 'domiciliario')
+        .of(pedido.id)
+        .set(null);
 
-    // 2) Actualiza el resto de campos
-    pedido.estado = 0; // PENDIENTE
-    (pedido as any).fecha_asignacion = null;
-    // si quieres dejar constancia del motivo del “rollback” de oferta:
-    (pedido as any).motivo_cancelacion = 'No respuesta de domiciliario';
-    (pedido as any).fecha_cancelacion = null;
+      // 2) Actualiza el resto de campos
+      pedido.estado = 0; // PENDIENTE
+      (pedido as any).fecha_asignacion = null;
+      // si quieres dejar constancia del motivo del “rollback” de oferta:
+      (pedido as any).motivo_cancelacion = 'No respuesta de domiciliario';
+      (pedido as any).fecha_cancelacion = null;
 
-    await repo.save(pedido);
-    return true;
-  });
-}
+      await repo.save(pedido);
+      return true;
+    });
+  }
   /**
    * Cancela por timeout SOLO si sigue PENDIENTE (0).
    */
@@ -199,4 +199,94 @@ async volverAPendienteSiOfertado(pedidoId: number): Promise<boolean> {
   async getByIdOrNull(id: number): Promise<Domicilio | null> {
     return (await this.domicilioRepo.findOne({ where: { id } })) ?? null;
   }
+
+  // domicilios.service.ts
+  // async confirmarAsignacionSiOfertado(pedidoId: number, domiId?: number): Promise<boolean> {
+  //   return this.dataSource.transaction(async (manager) => {
+  //     const repo = manager.getRepository(Domicilio);
+
+  //     const pedido = await repo
+  //       .createQueryBuilder('d')
+  //       .setLock('pessimistic_write')
+  //       .where('d.id = :id', { id: pedidoId })
+  //       .getOne();
+
+  //     if (!pedido) return false;
+  //     if (pedido.estado !== 5) return false;             // debe seguir OFERTADO
+
+  //     // (Opcional, recomendado) valida que el mismo domi esté aceptando
+  //     if (domiId && (pedido as any).domiciliario?.id && (pedido as any).domiciliario.id !== domiId) {
+  //       return false; // la oferta no era para este domi
+  //     }
+
+  //     pedido.estado = 1;                                 // ASIGNADO
+  //     (pedido as any).fecha_asignacion = new Date();
+  //     await repo.save(pedido);
+  //     return true;
+  //   });
+  // }
+
+  // domicilios.service.ts
+  async confirmarAsignacionSiOfertado(pedidoId: number, domiId?: number): Promise<boolean> {
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Domicilio);
+
+      // Bloqueo pesimista: evita carreras entre múltiples aceptaciones / timeouts
+      const pedido = await repo
+        .createQueryBuilder('d')
+        .setLock('pessimistic_write')
+        .where('d.id = :id', { id: pedidoId })
+        .getOne();
+
+      if (!pedido) return false;
+
+      // Debe seguir OFERTADO
+      if (pedido.estado !== 5) return false;
+
+      // (Opcional, recomendado) validar que el mismo domi que recibió la oferta sea quien acepta
+      if (domiId && (pedido as any).id_domiciliario && (pedido as any).id_domiciliario !== domiId) {
+        return false;
+      }
+
+      // Transición segura a ASIGNADO
+      pedido.estado = 1; // ASIGNADO
+      (pedido as any).fecha_asignacion = new Date();
+      await repo.save(pedido);
+
+      return true;
+    });
+  }
+
+
+  // domicilios.service.ts
+async cancelarPorClienteSiNoAsignado(pedidoId: number, motivo: string): Promise<boolean> {
+  return this.dataSource.transaction(async (manager) => {
+    const repo = manager.getRepository(Domicilio);
+    const p = await repo.createQueryBuilder('d')
+      .setLock('pessimistic_write')
+      .where('d.id = :id', { id: pedidoId })
+      .getOne();
+    if (!p) return false;
+
+    // Solo dejar cancelar si NO está ASIGNADO (1) ni ENTREGADO/etc.
+    if (![0,5].includes(p.estado)) return false;
+
+    // Si estaba OFERTADO (5), limpia relación con domi
+    if (p.estado === 5) {
+      await manager.createQueryBuilder()
+        .relation(Domicilio, 'domiciliario')
+        .of(p.id)
+        .set(null);
+    }
+
+    p.estado = 2; // tu estado "CANCELADO"
+    (p as any).motivo_cancelacion = (motivo || 'Cancelación por cliente').slice(0,160);
+    (p as any).fecha_cancelacion = new Date();
+
+    await repo.save(p);
+    return true;
+  });
+}
+
+
 }
