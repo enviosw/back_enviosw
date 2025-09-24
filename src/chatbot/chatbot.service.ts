@@ -220,7 +220,8 @@ export class ChatbotService {
     }
     this.isRetryRunning = true;
 
-    const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutos
+    const MAX_WAIT_MS = 20 * 60 * 1000;
+
 
     try {
       const pendientes = await this.domiciliosService.find({
@@ -282,7 +283,7 @@ export class ChatbotService {
             await this.mostrarMenuPostConfirmacion(
               pedido.numero_cliente,
               pedido.id,
-              '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:',
+              '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.',
               5 * 60 * 1000
             );
             continue;
@@ -340,10 +341,10 @@ export class ChatbotService {
           });
 
           // ofertasVigentes.set(pedido.id, { domi: domiciliario.telefono_whatsapp, expira: Date.now() + 120_000 });
-ofertasVigentes.set(pedido.id, {
-  expira: Date.now() + OFERTA_TIMEOUT_MS,              // <-- MS, NO segundos
-  domi: this.toTelKey(domiciliario.telefono_whatsapp), // <-- normalizado
-});
+          ofertasVigentes.set(pedido.id, {
+            expira: Date.now() + OFERTA_TIMEOUT_MS,              // <-- MS, NO segundos
+            domi: this.toTelKey(domiciliario.telefono_whatsapp), // <-- normalizado
+          });
 
 
 
@@ -464,7 +465,7 @@ ofertasVigentes.set(pedido.id, {
 
         // Verifica cancelable; si no, avisa
         if (!(await this.puedeCancelarPedido(pid))) {
-          await this.enviarMensajeTexto(numero, '🔒 Este pedido ya no puede cancelarse por este medio.');
+          await this.enviarMensajeTexto(numero, '🔒 Este pedido ya no puede cancelarse. Esta en proceso...');
           return;
         }
 
@@ -927,422 +928,540 @@ ofertasVigentes.set(pedido.id, {
     if (mensaje?.interactive?.type === 'button_reply') {
       const id = mensaje.interactive.button_reply.id;
 
-      if (id === 'menu_cancelar') {
-        await this.cancelarPedidoDesdeCliente(numero);
+      // MATCH de los distintos formatos de botón de cancelar
+      const isCancelar =
+        id === 'cancelar' ||
+        id === 'menu_cancelar' ||
+        /^cancelar_pedido_\d+$/.test(id) ||
+        /^menu_cancelar_\d+$/.test(id);
+
+      if (isCancelar) {
+        const st = estadoUsuarios.get(numero) || {};
+
+        // 1) Resolver pedidoId a partir del ID del botón o del estado en memoria
+        let pedidoId: number | null = null;
+
+        // menu_cancelar_223  -> grupo 1 = 223
+        let m = id.match(/^menu_cancelar_(\d+)$/);
+        if (m) pedidoId = Number(m[1]);
+
+        // cancelar_pedido_223 -> grupo 1 = 223
+        if (!pedidoId) {
+          m = id.match(/^cancelar_pedido_(\d+)$/);
+          if (m) pedidoId = Number(m[1]);
+        }
+
+        // Si no vino en el botón, usar el que tengamos en memoria
+        if (!pedidoId) {
+          pedidoId = st.pedidoId ?? null;
+        }
+
+        if (!pedidoId) {
+          this.logger.warn(`❗ Cancelar: no encontré pedido activo para ${numero} (id botón: ${id})`);
+          await this.enviarMensajeTexto(
+            numero,
+            'No encuentro un pedido activo para cancelar ahora. Si crees que es un error, escribe "menu".'
+          );
+          return;
+        }
+
+        // 2) Anti-doble cancelación (doble tap o reintento de WhatsApp)
+        try {
+          const key = `${numero}:${pedidoId}`;
+          const now = Date.now();
+          const TTL = 60_000; // 60s
+          const expira = cancelacionesProcesadas.get(key);
+
+          if (expira && now < expira) {
+            this.logger.debug(`(cancel) duplicado ignorado -> ${key}`);
+            await this.enviarMensajeTexto(numero, '✅ Ya habíamos registrado tu cancelación.');
+            return;
+          }
+          cancelacionesProcesadas.set(key, now + TTL);
+        } catch (e) {
+          this.logger.debug(`(cancel) no se pudo usar cancelacionesProcesadas: ${e?.message || e}`);
+        }
+
+        // 3) Leer el pedido actual
+        const pedido = await this.getPedidoById(pedidoId).catch(() => null);
+        if (!pedido) {
+          await this.enviarMensajeTexto(numero, 'No encuentro tu pedido, quizá ya fue cancelado.');
+          return;
+        }
+
+        // Si ya estaba cancelado, confirmar y salir
+        if (pedido.estado === 2) {
+          await this.enviarMensajeTexto(numero, '✅ Tu pedido ya estaba cancelado.');
+          return;
+        }
+
+        // 4) Si estaba ofertado (5) con domi, liberar domi
+        if (pedido.estado === 5 && pedido.id_domiciliario) {
+          try {
+            await this.domiciliarioService.liberarDomiciliario(pedido.id_domiciliario);
+          } catch (e) {
+            this.logger.warn(`No pude liberar domi ${pedido.id_domiciliario} al cancelar: ${e?.message || e}`);
+          }
+        }
+
+        // 5) Marcar cancelado en BD
+        try {
+          await this.domiciliosService.update(pedidoId, {
+            estado: 2, // cancelado
+            id_domiciliario: null,
+            motivo_cancelacion: 'Cancelado por el cliente (botón)',
+          });
+        } catch (e) {
+          this.logger.error(`Fallo al marcar cancelado el pedido ${pedidoId}: ${e?.message || e}`);
+          await this.enviarMensajeTexto(numero, 'Tuvimos un problema al cancelar. Inténtalo de nuevo.');
+          return;
+        }
+
+        // 6) Limpiar timers/mapas de oferta si los usas
+        try {
+          const t = temporizadoresOferta?.get(pedidoId);
+          if (t) {
+            clearTimeout(t);
+            temporizadoresOferta.delete(pedidoId);
+          }
+        } catch { /* opcional */ }
+
+        try {
+          if (ofertasVigentes?.has(pedidoId)) {
+            ofertasVigentes.delete(pedidoId);
+          }
+        } catch { /* opcional */ }
+
+        // 7) Limpiar estado en memoria del usuario
+        try {
+          st.esperandoAsignacion = false;
+          if (st.pedidoId === pedidoId) {
+            delete st.pedidoId;
+          }
+          // opcional: si usas idempotencia en memoria
+          // delete st.ultimoIdemKey; delete st.ultimoPedidoTs;
+          estadoUsuarios.set(numero, st);
+        } catch { /* opcional */ }
+
+        // 8) Confirmar al cliente
+        await this.enviarMensajeTexto(
+          numero,
+          '❌ Tu pedido ha sido *cancelado*. Si necesitas algo más, responde "hola" para empezar de nuevo.'
+        );
+
         return;
       }
-
       // =========================
       // ACEPTAR / RECHAZAR OFERTA
       // =========================
 
 
-    const matchAceptar = id.match(/^(?:ACEPTAR|aceptar_pedido)_(\d+)$/);
-if (matchAceptar) {
-  const pedidoId = Number(matchAceptar[1]);
+      const matchAceptar = id.match(/^(?:ACEPTAR|aceptar_pedido)_(\d+)$/);
+      if (matchAceptar) {
+        const pedidoId = Number(matchAceptar[1]);
 
-  // Idempotencia anti doble-tap / reintentos
-  const key = `${numero}:${pedidoId}`;
-  const now = Date.now();
-  const last = procesados.get(key);
-  if (last && (now - last) < TTL_MS) return;
+        // Idempotencia anti doble-tap / reintentos
+        const key = `${numero}:${pedidoId}`;
+        const now = Date.now();
+        const last = procesados.get(key);
+        if (last && (now - last) < TTL_MS) return;
 
-  // 🔎 VALIDACIÓN SOLO POR ESTADO DEL PEDIDO (pre-chequeo rápido)
-  const pedidoCheck = await this.getPedidoById(pedidoId);
+        // 🔎 VALIDACIÓN SOLO POR ESTADO DEL PEDIDO (pre-chequeo rápido)
+        const pedidoCheck = await this.getPedidoById(pedidoId);
 
-  if (!pedidoCheck) {
-    await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no existe.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (no existe): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        if (!pedidoCheck) {
+          await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no existe.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (no existe): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  // ⛔ Guardia "suave" en memoria: NO corta, solo loguea; la BD decide
-  const who =
-    (this as any).toTelKey
-      ? (this as any).toTelKey(numero)
-      : (numero || '').replace(/\D/g, '').replace(/^(\d{10})$/, '57$1'); // normaliza 57xxxxxxxxxx
-  const vig = ofertasVigentes.get(pedidoId);
-  if (!vig || Date.now() > vig.expira || vig.domi !== who) {
-    this.logger.warn(
-      `⚠️ Guardia oferta p=${pedidoId} vig=${!!vig} ` +
-      `expirado=${vig ? Date.now() > vig.expira : 'n/a'} ` +
-      `domiOK=${vig ? (vig.domi === who) : 'n/a'}`
-    );
-    // IMPORTANTE: no hacemos return; seguimos y dejamos que la BD confirme
-  }
+        // ⛔ Guardia "suave" en memoria: NO corta, solo loguea; la BD decide
+        const who =
+          (this as any).toTelKey
+            ? (this as any).toTelKey(numero)
+            : (numero || '').replace(/\D/g, '').replace(/^(\d{10})$/, '57$1'); // normaliza 57xxxxxxxxxx
+        const vig = ofertasVigentes.get(pedidoId);
+        if (!vig || Date.now() > vig.expira || vig.domi !== who) {
+          this.logger.warn(
+            `⚠️ Guardia oferta p=${pedidoId} vig=${!!vig} ` +
+            `expirado=${vig ? Date.now() > vig.expira : 'n/a'} ` +
+            `domiOK=${vig ? (vig.domi === who) : 'n/a'}`
+          );
+          // IMPORTANTE: no hacemos return; seguimos y dejamos que la BD confirme
+        }
 
-  if (pedidoCheck.estado === 1) { // ASIGNADO
-    await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue asignado, no puedes aceptarlo.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (asignado): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        if (pedidoCheck.estado === 1) { // ASIGNADO
+          await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue asignado, no puedes aceptarlo.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (asignado): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  if (pedidoCheck.estado === 2) { // CANCELADO
-    await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue cancelado, no está disponible.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Deseas seguir disponible para otros pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (cancelado): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        if (pedidoCheck.estado === 2) { // CANCELADO
+          await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue cancelado, no está disponible.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Deseas seguir disponible para otros pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (cancelado): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  if (pedidoCheck.estado !== 5) { // NO OFERTADO
-    await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no está disponible.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (no ofertado): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        if (pedidoCheck.estado !== 5) { // NO OFERTADO
+          await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no está disponible.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (no ofertado): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  // ✅ Resolver domi (mínimo: que exista)
-  const domi = await this.domiciliarioService.getByTelefono(numero);
-  if (!domi) {
-    await this.enviarMensajeTexto(numero, '⚠️ No pude validar tu cuenta de domiciliario.');
-    procesados.set(key, now);
-    return;
-  }
-  const domiId = domi.id;
+        // ✅ Resolver domi (mínimo: que exista)
+        const domi = await this.domiciliarioService.getByTelefono(numero);
+        if (!domi) {
+          await this.enviarMensajeTexto(numero, '⚠️ No pude validar tu cuenta de domiciliario.');
+          procesados.set(key, now);
+          return;
+        }
+        const domiId = domi.id;
 
-  // (Opcional) si la oferta es para un domi específico:
-  // if (pedidoCheck.id_domiciliario && pedidoCheck.id_domiciliario !== domiId) {
-  //   await this.enviarMensajeTexto(numero, '⚠️ Esta oferta no estaba dirigida a ti.');
-  //   procesados.set(key, now);
-  //   return;
-  // }
+        // (Opcional) si la oferta es para un domi específico:
+        // if (pedidoCheck.id_domiciliario && pedidoCheck.id_domiciliario !== domiId) {
+        //   await this.enviarMensajeTexto(numero, '⚠️ Esta oferta no estaba dirigida a ti.');
+        //   procesados.set(key, now);
+        //   return;
+        // }
 
-  // (opcional) limpia timeout de oferta si llevas uno por pedido
-  const tLocal = temporizadoresOferta?.get?.(pedidoId);
-  if (tLocal) { clearTimeout(tLocal); temporizadoresOferta.delete(pedidoId); }
+        // (opcional) limpia timeout de oferta si llevas uno por pedido
+        const tLocal = temporizadoresOferta?.get?.(pedidoId);
+        if (tLocal) { clearTimeout(tLocal); temporizadoresOferta.delete(pedidoId); }
 
-  // 🧱 Confirmación ATÓMICA en BD (5→1). La BD es la fuente de la verdad.
-  let ok = false;
-  try {
-    ok = await this.domiciliosService.confirmarAsignacionSiOfertado(pedidoId, domiId);
-  } catch (e: any) {
-    this.logger.error(`Error confirmando asignación ${pedidoId}: ${e?.message || e}`);
-  }
-  procesados.set(key, now);
+        // 🧱 Confirmación ATÓMICA en BD (5→1). La BD es la fuente de la verdad.
+        let ok = false;
+        try {
+          ok = await this.domiciliosService.confirmarAsignacionSiOfertado(pedidoId, domiId);
+        } catch (e: any) {
+          this.logger.error(`Error confirmando asignación ${pedidoId}: ${e?.message || e}`);
+        }
+        procesados.set(key, now);
 
-  if (!ok) {
-    await this.enviarMensajeTexto(numero, '⏱️ La oferta ya expiró o se reasignó.');
-    // Fallback: botones de estado (desktop a veces no los dibuja automáticamente)
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch {}
-    return;
-  }
+        if (!ok) {
+          await this.enviarMensajeTexto(numero, '⏱️ La oferta ya expiró o se reasignó.');
+          // Fallback: botones de estado (desktop a veces no los dibuja automáticamente)
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch { }
+          return;
+        }
 
-  // Éxito: limpia vigencia en memoria para ese pedido
-  ofertasVigentes.delete(pedidoId);
+        // Éxito: limpia vigencia en memoria para ese pedido
+        ofertasVigentes.delete(pedidoId);
 
-  // 🔄 Crear conversación (solo tras aceptación exitosa)
-  const conversacion = this.conversacionRepo.create({
-    numero_domiciliario: numero,
-    fecha_inicio: new Date(),
-    estado: 'activa',
-  });
-  const pedidoParaDatos = pedidoCheck ?? await this.getPedidoById(pedidoId);
-  if (pedidoParaDatos) conversacion.numero_cliente = pedidoParaDatos.numero_cliente;
-  await this.conversacionRepo.save(conversacion);
+        // 🔄 Crear conversación (solo tras aceptación exitosa)
+        const conversacion = this.conversacionRepo.create({
+          numero_domiciliario: numero,
+          fecha_inicio: new Date(),
+          estado: 'activa',
+        });
+        const pedidoParaDatos = pedidoCheck ?? await this.getPedidoById(pedidoId);
+        if (pedidoParaDatos) conversacion.numero_cliente = pedidoParaDatos.numero_cliente;
+        await this.conversacionRepo.save(conversacion);
 
-  estadoUsuarios.set(conversacion.numero_cliente, {
-    conversacionId: conversacion.id,
-    inicioMostrado: true,
-  });
-  estadoUsuarios.set(numero, {
-    conversacionId: conversacion.id,
-    tipo: 'conversacion_activa',
-    inicioMostrado: true,
-  });
+        estadoUsuarios.set(conversacion.numero_cliente, {
+          conversacionId: conversacion.id,
+          inicioMostrado: true,
+        });
+        estadoUsuarios.set(numero, {
+          conversacionId: conversacion.id,
+          tipo: 'conversacion_activa',
+          inicioMostrado: true,
+        });
 
-  // 🎉 Notificar DOMI
-  await this.enviarMensajeTexto(numero, '📦 Pedido *asignado a ti*. Ya puedes hablar con el cliente.');
+        // 🎉 Notificar DOMI
+        await this.enviarMensajeTexto(numero, '📦 Pedido *asignado a ti*. Ya puedes hablar con el cliente.');
 
-  // 👤 Notificar CLIENTE
-  const nombreDomi = `${domi.nombre ?? ''} ${domi.apellido ?? ''}`.trim() || numero;
-  const chaqueta = domi?.numero_chaqueta ?? '-';
-  const telDomi = numero.startsWith('+') ? numero : `+57${numero.replace(/\D/g, '').slice(-10)}`;
-  if (pedidoParaDatos?.numero_cliente) {
-    await this.enviarMensajeTexto(
-      pedidoParaDatos.numero_cliente,
-      [
-        '✅ ¡Domiciliario asignado!',
-        `👤 *${nombreDomi}*`,
-        `🧥 Chaqueta: *${chaqueta}*`,
-        `📞 Teléfono: *${telDomi}*`,
-        '',
-        '📲 Ya estás conectado con el domiciliario. Puedes escribirle por este mismo chat. ✅'
-      ].join('\n')
-    );
-  }
+        // 👤 Notificar CLIENTE
+        const nombreDomi = `${domi.nombre ?? ''} ${domi.apellido ?? ''}`.trim() || numero;
+        const chaqueta = domi?.numero_chaqueta ?? '-';
+        const telDomi = numero.startsWith('+') ? numero : `+57${numero.replace(/\D/g, '').slice(-10)}`;
+        if (pedidoParaDatos?.numero_cliente) {
+          await this.enviarMensajeTexto(
+            pedidoParaDatos.numero_cliente,
+            [
+              '✅ ¡Domiciliario asignado!',
+              `👤 *${nombreDomi}*`,
+              `🧥 Chaqueta: *${chaqueta}*`,
+              `📞 Teléfono: *${telDomi}*`,
+              '',
+              '📲 Ya estás conectado con el domiciliario. Puedes escribirle por este mismo chat. ✅'
+            ].join('\n')
+          );
+        }
 
-  await this.enviarBotonFinalizarAlDomi(numero);
-  return;
-}
+        await this.enviarBotonFinalizarAlDomi(numero);
+        return;
+      }
 
 
-const matchRechazar = id.match(/^(?:RECHAZAR|rechazar_pedido)_(\d+)$/);
-if (matchRechazar) {
-  const pedidoId = Number(matchRechazar[1]);
+      const matchRechazar = id.match(/^(?:RECHAZAR|rechazar_pedido)_(\d+)$/);
+      if (matchRechazar) {
+        const pedidoId = Number(matchRechazar[1]);
 
-  // Idempotencia anti doble-tap / reintentos
-  const key = `${numero}:RECHAZAR:${pedidoId}`;
-  const now = Date.now();
-  const last = procesados.get(key);
-  if (last && (now - last) < TTL_MS) return;
+        // Idempotencia anti doble-tap / reintentos
+        const key = `${numero}:RECHAZAR:${pedidoId}`;
+        const now = Date.now();
+        const last = procesados.get(key);
+        if (last && (now - last) < TTL_MS) return;
 
-  // 🔎 Pre-chequeo rápido por estado
-  const pedidoCheck = await this.getPedidoById(pedidoId);
-  if (!pedidoCheck) {
-    await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no existe.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (no existe): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        // 🔎 Pre-chequeo rápido por estado
+        const pedidoCheck = await this.getPedidoById(pedidoId);
+        if (!pedidoCheck) {
+          await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no existe.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (no existe): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  // ⛔ Guardia en memoria: ahora solo loguea, no corta
-  const who =
-    (this as any).toTelKey
-      ? (this as any).toTelKey(numero)
-      : (numero || '').replace(/\D/g, '').replace(/^(\d{10})$/, '57$1');
-  const vig = ofertasVigentes.get(pedidoId);
-  if (!vig || Date.now() > vig.expira || vig.domi !== who) {
-    this.logger.warn(
-      `⚠️ Guardia RECHAZAR p=${pedidoId} vig=${!!vig} ` +
-      `expirado=${vig ? Date.now() > vig.expira : 'n/a'} ` +
-      `domiOK=${vig ? (vig.domi === who) : 'n/a'}`
-    );
-    // OJO: no hacemos return, la BD decide
-  }
+        // ⛔ Guardia en memoria: ahora solo loguea, no corta
+        const who =
+          (this as any).toTelKey
+            ? (this as any).toTelKey(numero)
+            : (numero || '').replace(/\D/g, '').replace(/^(\d{10})$/, '57$1');
+        const vig = ofertasVigentes.get(pedidoId);
+        if (!vig || Date.now() > vig.expira || vig.domi !== who) {
+          this.logger.warn(
+            `⚠️ Guardia RECHAZAR p=${pedidoId} vig=${!!vig} ` +
+            `expirado=${vig ? Date.now() > vig.expira : 'n/a'} ` +
+            `domiOK=${vig ? (vig.domi === who) : 'n/a'}`
+          );
+          // OJO: no hacemos return, la BD decide
+        }
 
-  if (pedidoCheck.estado === 1) { // ASIGNADO
-    await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue asignado, no puedes rechazarlo.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (asignado): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        if (pedidoCheck.estado === 1) { // ASIGNADO
+          await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue asignado, no puedes rechazarlo.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (asignado): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  if (pedidoCheck.estado === 2) { // CANCELADO
-    await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue cancelado.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (cancelado): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        if (pedidoCheck.estado === 2) { // CANCELADO
+          await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue cancelado.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (cancelado): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  if (pedidoCheck.estado !== 5) { // NO OFERTADO
-    await this.enviarMensajeTexto(numero, '⏱️ Te demoraste en responder. El pedido ya no está disponible.');
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botones (no ofertado): ${e?.message || e}`);
-    }
-    procesados.set(key, now);
-    return;
-  }
+        if (pedidoCheck.estado !== 5) { // NO OFERTADO
+          await this.enviarMensajeTexto(numero, '⏱️ Te demoraste en responder. El pedido ya no está disponible.');
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones (no ofertado): ${e?.message || e}`);
+          }
+          procesados.set(key, now);
+          return;
+        }
 
-  // 🚦 Intento atómico: revertir solo si sigue en estado OFERTADO (5)
-  const ok = await this.domiciliosService.volverAPendienteSiOfertado(pedidoId);
-  procesados.set(key, now);
+        // 🚦 Intento atómico: revertir solo si sigue en estado OFERTADO (5)
+        const ok = await this.domiciliosService.volverAPendienteSiOfertado(pedidoId);
+        procesados.set(key, now);
 
-  if (!ok) {
-    await this.enviarMensajeTexto(numero, '⏱️ Te demoraste en responder. El pedido ya no está disponible.');
-    return;
-  }
+        if (!ok) {
+          await this.enviarMensajeTexto(numero, '⏱️ Te demoraste en responder. El pedido ya no está disponible.');
+          return;
+        }
 
-  // 🧹 Limpiar timeout de oferta si existía
-  const t = temporizadoresOferta?.get?.(pedidoId);
-  if (t) { clearTimeout(t); temporizadoresOferta.delete(pedidoId); }
+        // 🧹 Limpiar timeout de oferta si existía
+        const t = temporizadoresOferta?.get?.(pedidoId);
+        if (t) { clearTimeout(t); temporizadoresOferta.delete(pedidoId); }
 
-  // ✅ Liberar domi si estaba atado
-  try {
-    const pedido = await this.getPedidoById(pedidoId);
-    if (pedido?.id_domiciliario) {
-      await this.domiciliarioService.liberarDomiciliario(pedido.id_domiciliario);
-    }
-  } catch (e) {
-    this.logger.warn(`No se pudo liberar domi tras rechazo en pedido ${pedidoId}: ${e instanceof Error ? e.message : e}`);
-  }
+        // ✅ Liberar domi si estaba atado
+        try {
+          const pedido = await this.getPedidoById(pedidoId);
+          if (pedido?.id_domiciliario) {
+            await this.domiciliarioService.liberarDomiciliario(pedido.id_domiciliario);
+          }
+        } catch (e) {
+          this.logger.warn(`No se pudo liberar domi tras rechazo en pedido ${pedidoId}: ${e instanceof Error ? e.message : e}`);
+        }
 
-  // Mensaje al domiciliario
-  await this.enviarMensajeTexto(numero, '❌ Has rechazado el pedido.');
+        // Mensaje al domiciliario
+        await this.enviarMensajeTexto(numero, '❌ Has rechazado el pedido.');
 
-  try {
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: numero,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-            { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-          ],
-        },
-      },
-    });
-  } catch (e) {
-    this.logger.warn(`⚠️ Falló envío de botones (rechazo): ${e?.message || e}`);
-  }
+        try {
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: numero,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                ],
+              },
+            },
+          });
+        } catch (e) {
+          this.logger.warn(`⚠️ Falló envío de botones (rechazo): ${e?.message || e}`);
+        }
 
-  // Reintentar asignación a otros domis
-  setTimeout(() => this.reintentarAsignacionPendientes(), 1000);
-  return;
-}
+        // Reintentar asignación a otros domis
+        setTimeout(() => this.reintentarAsignacionPendientes(), 1000);
+        return;
+      }
 
 
 
@@ -1535,7 +1654,48 @@ if (matchRechazar) {
 
         const st = estadoUsuarios.get(numero) || {};
         const datos = st?.datos || {};
-        const tipo = st?.tipo || 'servicio';
+        const tipo = (st?.tipo || 'servicio').replace('opcion_', '');
+
+        // ===== Idempotencia y anti-doble-tap (solo memoria, sin tocar BD) =====
+        const ahora = Date.now();
+        const idemKey = [
+          numero,
+          tipo,
+          datos.direccionRecoger ?? '',
+          (datos.direccionEntregar ?? datos.direccionEntrega) ?? '',
+          datos.telefonoRecoger ?? '',
+          (datos.telefonoEntregar ?? datos.telefonoEntrega) ?? '',
+          (datos.listaCompras ?? '').trim(),
+        ].join('|');
+
+        // Reuso si el mismo pedido ya fue creado en los últimos 5 min
+        if (
+          st.ultimoIdemKey === idemKey &&
+          st.pedidoId &&
+          typeof st.ultimoPedidoTs === 'number' &&
+          (ahora - st.ultimoPedidoTs) < 5 * 60 * 1000
+        ) {
+          this.logger.warn(`🛡️ Idempotencia: duplicado evitado (reuso pedidoId=${st.pedidoId})`);
+          await this.mostrarMenuPostConfirmacion(
+            numero,
+            st.pedidoId,
+            st.esperandoAsignacion
+              ? '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+
+              : '⏳ Si ya no lo necesitas, puedes cancelar:',
+            st.esperandoAsignacion ? 60 * 1000 : 60 * 1000
+          );
+          return;
+        }
+
+        // Candado 20s para taps muy seguidos
+        if (st.creandoPedidoHasta && ahora < st.creandoPedidoHasta) {
+          this.logger.warn('🛡️ Candado activo: ignorando confirmación duplicada muy cercana.');
+          return;
+        }
+        st.creandoPedidoHasta = ahora + 20_000;
+        estadoUsuarios.set(numero, st);
+        // =====================================================================
 
         try {
           // 1) Intentar asignar un domiciliario disponible
@@ -1551,19 +1711,32 @@ if (matchRechazar) {
             if (!st.avisoNoDomiEnviado) {
               await this.enviarMensajeTexto(numero, '🚨');
               const aviso = [
-                '✨ *Aviso importante*',
-                'En este momento *NO TENEMOS DOMICILIARIOS DISPONIBLES*',
+                'Con mucho gusto estamos procesando tu domicilio ✨🛵',
                 '',
-                '*Puedes:*',
-                '*Esperar* ⏱️ ~10 minutos o menos mientras uno queda libre.',
-                '*Cancelar* el servicio.'
+                'En breve te avisaremos cuando asignemos el domiciliario ✅',
+                '',
+                '🙏 Gracias por tu paciencia y confianza.'
               ].join('\n');
+
               await this.enviarMensajeTexto(numero, aviso);
               st.avisoNoDomiEnviado = true;
             } else {
               this.logger.debug('ℹ️ Aviso de no disponibilidad ya enviado. Se evita duplicar.');
             }
             estadoUsuarios.set(numero, st);
+
+            // Reuso si ya existe pedido reciente con misma firma
+            if (st.ultimoIdemKey === idemKey && st.pedidoId) {
+              this.logger.warn(`🛡️ Idempotencia (pendiente): reuso pedidoId=${st.pedidoId}`);
+              await this.mostrarMenuPostConfirmacion(
+                numero,
+                st.pedidoId,
+                '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+                ,
+                60 * 1000
+              );
+              return;
+            }
 
             const pedidoPendiente = await this.domiciliosService.create({
               mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
@@ -1573,7 +1746,7 @@ if (matchRechazar) {
               hora: new Date().toTimeString().slice(0, 5),
               id_cliente: null,
               id_domiciliario: null,
-              tipo_servicio: tipo.replace('opcion_', ''),
+              tipo_servicio: tipo,
               origen_direccion: datos.direccionRecoger ?? '',
               destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
               telefono_contacto_origen: datos.telefonoRecoger ?? '',
@@ -1584,10 +1757,17 @@ if (matchRechazar) {
             });
 
             if (pedidoPendiente?.id) {
+              // Actualiza estado idempotente
+              st.ultimoIdemKey = idemKey;
+              st.pedidoId = pedidoPendiente.id;
+              st.ultimoPedidoTs = Date.now();
+              estadoUsuarios.set(numero, st);
+
               await this.mostrarMenuPostConfirmacion(
                 numero,
                 pedidoPendiente.id,
-                '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:',
+                '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+                ,
                 60 * 1000
               );
             }
@@ -1595,6 +1775,19 @@ if (matchRechazar) {
           }
 
           // 2) Sí hay domi: crear pedido como OFERTADO
+          // Reuso si ya existe pedido reciente con misma firma
+          if (st.ultimoIdemKey === idemKey && st.pedidoId) {
+            this.logger.warn(`🛡️ Idempotencia (ofertado): reuso pedidoId=${st.pedidoId}`);
+            await this.enviarMensajeTexto(numero, '⏳ Estamos procesando tu domicilio. Gracias por preferirnos.');
+            await this.mostrarMenuPostConfirmacion(
+              numero,
+              st.pedidoId,
+              '⏳ Si ya no lo necesitas, puedes cancelar:',
+              60 * 1000
+            );
+            return;
+          }
+
           const pedidoOfertado = await this.domiciliosService.create({
             mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
             estado: 5, // ofertado
@@ -1603,7 +1796,7 @@ if (matchRechazar) {
             hora: new Date().toTimeString().slice(0, 5),
             id_cliente: null,
             id_domiciliario: domiciliario.id,
-            tipo_servicio: tipo.replace('opcion_', ''),
+            tipo_servicio: tipo,
             origen_direccion: datos.direccionRecoger ?? '',
             destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
             telefono_contacto_origen: datos.telefonoRecoger ?? '',
@@ -1613,10 +1806,19 @@ if (matchRechazar) {
             foto_entrega_url: '',
           });
 
+          // Actualiza estado idempotente
+          if (pedidoOfertado?.id) {
+            st.ultimoIdemKey = idemKey;
+            st.pedidoId = pedidoOfertado.id;
+            st.ultimoPedidoTs = Date.now();
+            st.esperandoAsignacion = false;
+            estadoUsuarios.set(numero, st);
+          }
+
           // ——— construir RESUMEN y OFERTAR con helper
           const partes: string[] = [];
           partes.push('📦 *Nuevo pedido disponible*', '');
-          partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio').replace('opcion_', '')}`);
+          partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio')}`);
 
           if (datos.listaCompras) {
             const listaRaw = String(datos.listaCompras).trim().replace(/\r\n?/g, '\n');
@@ -1644,8 +1846,6 @@ if (matchRechazar) {
             resumenLargo,
             // bodyCorto opcional
           });
-
-
 
           await this.enviarMensajeTexto(numero, '⏳ Estamos procesando tu domicilio. Gracias por preferirnos.');
 
@@ -1687,17 +1887,30 @@ if (matchRechazar) {
           if (!st.avisoNoDomiEnviado) {
             await this.enviarMensajeTexto(numero, '🚨');
             const aviso = [
-              '✨ *Aviso importante*',
-              'En este momento *NO TENEMOS DOMICILIARIOS DISPONIBLES*',
+              'Con mucho gusto estamos procesando tu domicilio ✨🛵',
               '',
-              '*Puedes:*',
-              '*Esperar* ⏱️ ~10 minutos o menos mientras uno queda libre.',
-              '*Cancelar* el servicio.'
+              'En breve te avisaremos cuando asignemos el domiciliario ✅',
+              '',
+              '🙏 Gracias por tu paciencia y confianza.'
             ].join('\n');
+
             await this.enviarMensajeTexto(numero, aviso);
             st.avisoNoDomiEnviado = true;
           }
           estadoUsuarios.set(numero, st);
+
+          // Evita doble create también en el catch
+          if (st.ultimoIdemKey === idemKey && st.pedidoId) {
+            this.logger.warn(`🛡️ Idempotencia (catch): reuso pedidoId=${st.pedidoId}`);
+            await this.mostrarMenuPostConfirmacion(
+              numero,
+              st.pedidoId,
+              '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+              ,
+              60 * 1000
+            );
+            return;
+          }
 
           const pedidoPendiente = await this.domiciliosService.create({
             mensaje_confirmacion: 'Confirmado por el cliente vía WhatsApp',
@@ -1707,7 +1920,7 @@ if (matchRechazar) {
             hora: new Date().toTimeString().slice(0, 5),
             id_cliente: null,
             id_domiciliario: null,
-            tipo_servicio: tipo.replace('opcion_', ''),
+            tipo_servicio: tipo,
             origen_direccion: datos.direccionRecoger ?? '',
             destino_direccion: datos.direccionEntregar ?? datos.direccionEntrega ?? '',
             telefono_contacto_origen: datos.telefonoRecoger ?? '',
@@ -1718,16 +1931,28 @@ if (matchRechazar) {
           });
 
           if (pedidoPendiente?.id) {
+            st.ultimoIdemKey = idemKey;
+            st.pedidoId = pedidoPendiente.id;
+            st.ultimoPedidoTs = Date.now();
+            estadoUsuarios.set(numero, st);
+
             await this.mostrarMenuPostConfirmacion(
               numero,
               pedidoPendiente.id,
-              '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:',
+              '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+              ,
               60 * 1000
             );
           }
           return;
+        } finally {
+          // Libera candado siempre
+          const s = estadoUsuarios.get(numero) || {};
+          s.creandoPedidoHasta = undefined;
+          estadoUsuarios.set(numero, s);
         }
       }
+
 
       // ✏️ Editar información
       if (id === 'editar_info') {
@@ -2107,105 +2332,129 @@ if (matchRechazar) {
   }
 
 
-
-  // 👇 Helper: extrae la ÚLTIMA secuencia de ≥7 dígitos como teléfono y lo demás lo toma como dirección
-  private extraerDireccionYTelefono(raw: string): { direccion: string | null; telefono: string | null } {
-    if (!raw) return { direccion: null, telefono: null };
-
-    const texto = String(raw).trim();
-
-    // busca secuencias de 7+ dígitos (captura móviles 10 dígitos y fijos 7+)
-    const matches = texto.match(/\d{7,}/g);
-    if (!matches || matches.length === 0) {
-      return { direccion: texto, telefono: null };
-    }
-
-    const telefono = matches[matches.length - 1]; // tomamos la ÚLTIMA (cliente suele poner el tel al final)
-    // quita separadores alrededor del teléfono al removerlo de la dirección
-    const direccion = texto
-      .replace(telefono, '')
-      .replace(/[,\-–—|:/]*\s*$/, '')              // separadores al final
-      .replace(/\s*(tel\.?:?)?\s*$/i, '')           // "tel:" al final
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-
-    return { direccion: direccion || null, telefono };
-  }
-
-  // Versión robusta con las mismas validaciones y tolerante a mensajes “juntos” (lista + dirección/teléfono)
-  // - Extrae dirección y teléfono con this.extraerDireccionYTelefono(mensaje)
-  // - Soporta cuando el usuario manda TODO en un solo mensaje (paso 1)
-  // - En paso 2 también acepta si reenvía lista + entrega otra vez
   async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
-    const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_2' };
+    const estado = estadoUsuarios.get(numero) || {
+      paso: 0,
+      datos: {},
+      tipo: 'opcion_2',
+      answeredStep: -1 as number,                // último paso contestado (evita dobles)
+      lastPrompt: { key: '', at: 0 } as { key: string; at: number },
+      guardHasta: undefined as number | undefined, // ignora residuos pegados al prompt
+    };
 
-    // Helpers breves
-    const extraerTelefono = (txt?: string): string | null => {
-      if (!txt) return null;
-      const all = txt.match(/\d{7,}/g);
+    const now = Date.now();
+    const txt = (mensaje ?? '').trim();
+
+    // ===== Helpers =====
+    const extraerTelefono = (t?: string): string | null => {
+      if (!t) return null;
+      const all = t.match(/\d{7,}/g);            // 7+ dígitos seguidos
       return all?.length ? all[all.length - 1] : null;
     };
-    const direccionValida = (txt?: string) => !!txt && txt.trim().length >= 5;
+    const direccionValida = (t?: string) => !!t && t.trim().length >= 5;
 
-    // Prompts cortos
+    const promptOnce = async (key: string, send: () => Promise<any>, cooldownMs = 8000) => {
+      const lp = estado.lastPrompt || { key: '', at: 0 };
+      if (lp.key === key && now - lp.at < cooldownMs) return;
+      await send();
+      estado.lastPrompt = { key, at: Date.now() };
+      // tras prompt, ignora residuos pegados por 2s
+      estado.guardHasta = Date.now() + 2000;
+    };
+
+    const guardActivo = () =>
+      typeof estado.guardHasta === 'number' && Date.now() < (estado.guardHasta as number);
+
+    // Prompts
     const pedirLista = async () =>
-      this.enviarMensajeTexto(numero, '🛒 Envía tu *lista completa*. (Puedes pegar todo en un mensaje)');
+      promptOnce('lista', () =>
+        this.enviarMensajeTexto(
+          numero,
+          '🛒 Envía tu *lista completa*. (Puedes pegar todo en un mensaje)'
+        )
+      );
+
     const pedirDirEntrega = async () =>
-      this.enviarMensajeTexto(numero, '🏠 Ingresa la dirección de *entrega*');
+      promptOnce('dir', () =>
+        this.enviarMensajeTexto(numero, '🏠 Ingresa la dirección de *entrega*')
+      );
+
     const pedirTelEntrega = async () =>
-      this.enviarMensajeTexto(numero, '📞 Ingresa el teléfono de quien *recibe*');
+      promptOnce('tel', () =>
+        this.enviarMensajeTexto(numero, '📞 Ingresa el teléfono de quien *recibe*')
+      );
+
+    // Si ya respondimos este paso, ignorar extras
+    if (estado.answeredStep === estado.paso) {
+      estadoUsuarios.set(numero, estado);
+      return;
+    }
 
     switch (estado.paso) {
       // 0) Pedimos la lista
       case 0: {
         await pedirLista();
-        estado.paso = 1;
+        estado.paso = 1; // avanzar ANTES de esperar respuesta
         break;
       }
 
-      // 1) Guardamos la lista tal cual y pedimos dirección
+      // 1) Recibir lista y pedir dirección
       case 1: {
-        if (!mensaje?.trim()) {
+        if (guardActivo()) break;
+
+        if (!txt) {
           await this.enviarMensajeTexto(numero, '⚠️ Envía la *lista* para continuar.');
-          await pedirLista();
           break;
         }
 
-        estado.datos.listaCompras = mensaje.trim();
-        await pedirDirEntrega();
+        estado.datos.listaCompras = txt;
+        estado.answeredStep = 1;
         estado.paso = 2;
+
+        await pedirDirEntrega();
         break;
       }
 
-      // 2) Guardamos dirección (mín. 5 caracteres) y pedimos teléfono
+      // 2) Recibir dirección y pedir teléfono
       case 2: {
-        if (!direccionValida(mensaje)) {
-          await this.enviarMensajeTexto(numero, '⚠️ Escribe una *dirección válida* (mín. 5 caracteres).');
-          await pedirDirEntrega();
+        if (guardActivo()) break;
+
+        if (!direccionValida(txt)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Escribe una *dirección válida* (mín. 5 caracteres).'
+          );
           break;
         }
 
-        const dir = mensaje.trim();
+        const dir = txt;
         estado.datos.direccionEntrega = dir;
         estado.datos.direccionEntregar = dir; // compat
-        await pedirTelEntrega();
+        estado.answeredStep = 2;
         estado.paso = 3;
+
+        await pedirTelEntrega();
         break;
       }
 
-      // 3) Guardamos teléfono (7+ dígitos) y confirmamos
+      // 3) Recibir teléfono (7+ dígitos) y enviar resumen + botones
       case 3: {
-        const tel = extraerTelefono(mensaje);
+        if (guardActivo()) break;
+
+        const tel = extraerTelefono(txt);
         if (!tel || !/^\d{7,}$/.test(tel)) {
-          await this.enviarMensajeTexto(numero, '⚠️ Teléfono inválido. Intenta de nuevo (7+ dígitos).');
-          await pedirTelEntrega();
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Teléfono inválido. Intenta de nuevo (7+ dígitos).'
+          );
           break;
         }
 
         estado.datos.telefonoEntrega = tel;
         estado.datos.telefonoEntregar = tel;
+        estado.answeredStep = 3;
+        estado.paso = 4; // queda esperando confirmación/edición por BOTONES
 
-        // Resumen + botones (corto)
         const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
         await this.enviarMensajeTexto(
           numero,
@@ -2230,35 +2479,21 @@ if (matchRechazar) {
             },
           },
         });
-
-        estado.confirmacionEnviada = true;
-        estado.paso = 4;
         break;
       }
 
-      // 4) Correcciones después del resumen (si el usuario envía algo)
+      // 4) Espera de confirmación/edición — NO se actualiza nada con texto libre
       case 4: {
-        if (!mensaje?.trim()) break;
+        if (!txt) break;
 
-        // Permitir correcciones rápidas: si hay 7+ dígitos, lo tomamos como tel; si no, como dirección
-        const tel = extraerTelefono(mensaje);
-        if (tel && /^\d{7,}$/.test(tel)) {
-          estado.datos.telefonoEntrega = tel;
-          estado.datos.telefonoEntregar = tel;
-        } else if (direccionValida(mensaje)) {
-          const dir = mensaje.trim();
-          estado.datos.direccionEntrega = dir;
-          estado.datos.direccionEntregar = dir;
-        }
-
+        // El usuario mandó texto, pero en este paso NO aceptamos cambios por texto.
+        // Debe usar el botón "🔁 No, editar".
         await this.enviarMensajeTexto(
           numero,
-          '✍️ Datos actualizados:\n\n' +
-          `🏠 Entrega: ${estado.datos.direccionEntrega}\n` +
-          `📞 Tel: ${estado.datos.telefonoEntrega}`
+          'ℹ️ Para corregir tus datos, toca *"🔁 No, editar"* y elige qué cambiar.'
         );
 
-        // (Opcional) volver a mostrar los botones
+        // (Opcional) reponer los botones si quieres
         try {
           await axiosWhatsapp.post('/messages', {
             messaging_product: 'whatsapp',
@@ -2266,7 +2501,7 @@ if (matchRechazar) {
             type: 'interactive',
             interactive: {
               type: 'button',
-              body: { text: '¿Es correcto ahora?' },
+              body: { text: '¿Es correcto?' },
               action: {
                 buttons: [
                   { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
@@ -2275,9 +2510,7 @@ if (matchRechazar) {
               },
             },
           });
-        } catch (e) {
-          // no bloquear si falla el reenvío de botones
-        }
+        } catch { }
         break;
       }
 
@@ -2748,178 +2981,217 @@ private async procesarAutoPedidoDesde(
 
   const telClienteNorm = normalizar(numeroWhatsApp);
 
-  // 1) Crear SIEMPRE el pedido como PENDIENTE (0)
-  const pedidoCreado = await this.domiciliosService.create({
-    mensaje_confirmacion: 'Auto-ingreso (pedido desde)',
-    estado: 0, // pendiente
-    numero_cliente: telClienteNorm,
-    fecha: new Date().toISOString(),
-    hora: new Date().toTimeString().slice(0, 5),
-    id_cliente: null,
-    tipo_servicio: 'auto',
-    origen_direccion: '',
-    destino_direccion: '',
-    telefono_contacto_origen: '',
-    telefono_contacto_destino: '',
-    notas: '',
-    detalles_pedido: textoOriginal,
-    foto_entrega_url: '',
-  });
+  // ===================== ANTI-DUPLICADO / IDEMPOTENCIA (solo memoria) =====================
+  // - Evita doble inserción si WhatsApp reentrega el mismo webhook o hay doble disparo.
+  // - No toca BD ni otros servicios.
+  const st = estadoUsuarios.get(telClienteNorm) || {};
+  const ahora = Date.now();
+  const firmaTexto = sanearBodyMultiline(textoOriginal || '', 900); // misma normalización que envías
+  const idemKey = [telClienteNorm, 'auto', firmaTexto].join('|');
 
-  // 2) Intentar tomar un domiciliario del turno
-  let domiciliario: Domiciliario | null = null;
-  try {
-    domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
-  } catch {
-    domiciliario = null;
-  }
-
-  // 2.a) Si NO hay domi → informar cliente y mostrar menú de cancelar
-  if (!domiciliario) {
-    await this.enviarMensajeTexto(telClienteNorm, '🚨');
-    await this.enviarMensajeTexto(
-      telClienteNorm,
-      [
-        '✨ *Aviso importante*',
-        'En este momento *NO TENEMOS DOMICILIARIOS DISPONIBLES*',
-        '',
-        '1️⃣ Puedes *esperar* ⏱️ ~10 minutos o menos.',
-        '2️⃣ O *cancelar* el servicio.',
-      ].join('\n')
-    );
-
-    if (pedidoCreado?.id) {
-      await this.mostrarMenuPostConfirmacion(
-        telClienteNorm,
-        pedidoCreado.id,
-        '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:'
-      );
-    }
-
-    const st = estadoUsuarios.get(telClienteNorm) || {};
-    st.esperandoAsignacion = true;
-    estadoUsuarios.set(telClienteNorm, st);
-    return;
-  }
-
-  // 3) Pasar a OFERTADO (5) solo si sigue pendiente (atómico)
-  const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
-    pedidoCreado.id,
-    domiciliario.id
-  );
-
-  if (!ofertado) {
-    // Perdimos carrera; liberar domi y notificar
-    try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch {}
-    await this.enviarMensajeTexto(
-      telClienteNorm,
-      '⏳ Estamos gestionando tu pedido. Te avisaremos apenas asignemos un domiciliario.'
-    );
+  // 1) Reusar si ya creaste el mismo pedido hace poco (ventana 5 min)
+  if (
+    st.autoUltimoIdemKey === idemKey &&
+    st.autoPedidoId &&
+    typeof st.autoUltimoTs === 'number' &&
+    (ahora - st.autoUltimoTs) < 5 * 60 * 1000
+  ) {
+    this.logger.warn(`🛡️ Idempotencia(auto): reuso pedidoId=${st.autoPedidoId} (evito doble inserción)`);
+    // Mantén la UX actual: informa/menú como ya haces en tu flujo estándar
+    await this.enviarMensajeTexto(telClienteNorm, '⏳ Estamos procesando tu domicilio. Gracias por preferirnos.');
     await this.mostrarMenuPostConfirmacion(
       telClienteNorm,
-      pedidoCreado.id,
-      '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:',
+      st.autoPedidoId,
+      '⏳ Si ya no lo necesitas, puedes cancelar:',
       60 * 1000
     );
     return;
   }
 
-  // 4) Construir resumen
-  const tipoLinea = '🔁 *Tipo de servicio:* auto';
-  const listaODetalles = textoOriginal ? `📝 *Detalles:*\n${sanearBodyMultiline(textoOriginal)}` : '';
-  const resumenParaDomi = [tipoLinea, listaODetalles].filter(Boolean).join('\n\n');
+  // 2) Candado de 20s para taps o reentradas muy seguidas
+  if (st.creandoAutoPedidoHasta && ahora < st.creandoAutoPedidoHasta) {
+    this.logger.warn('🛡️ Candado(auto) activo: ignorando creación duplicada muy cercana.');
+    return;
+  }
+  st.creandoAutoPedidoHasta = ahora + 20_000;
+  estadoUsuarios.set(telClienteNorm, st);
+  // ========================================================================================
 
-  const resumenLargo = sanearBodyMultiline(
-    `📦 *Nuevo pedido disponible:*\n\n${resumenParaDomi}\n\n` +
-    `👤 Cliente: *${nombreContacto || 'Cliente'}*\n` +
-    `📞 Teléfono: ${telClienteNorm}`
-  );
+  try {
+    // 1) Crear SIEMPRE el pedido como PENDIENTE (0)
+    const pedidoCreado = await this.domiciliosService.create({
+      mensaje_confirmacion: 'Auto-ingreso (pedido desde)',
+      estado: 0, // pendiente
+      numero_cliente: telClienteNorm,
+      fecha: new Date().toISOString(),
+      hora: new Date().toTimeString().slice(0, 5),
+      id_cliente: null,
+      tipo_servicio: 'auto',
+      origen_direccion: '',
+      destino_direccion: '',
+      telefono_contacto_origen: '',
+      telefono_contacto_destino: '',
+      notas: '',
+      detalles_pedido: textoOriginal,
+      foto_entrega_url: '',
+    });
 
-  // 5) Enviar OFERTA al domi (texto + botones)
-  await this.enviarOfertaAceptarRechazarConId({
-    telefonoDomi: domiciliario.telefono_whatsapp,
-    pedidoId: pedidoCreado.id,
-    resumenLargo,
-    bodyCorto: '¿Deseas tomar este pedido?',
-  });
-
-  // 🧠 Registrar oferta vigente en memoria (expira en 2 min)
-  const domTelKey = toTelKey(domiciliario.telefono_whatsapp);
-  const OFERTA_TIMEOUT_MS = 120_000;
-  ofertasVigentes.set(pedidoCreado.id, {
-    expira: Date.now() + OFERTA_TIMEOUT_MS,
-    domi: domTelKey,
-  });
-
-  // 🧹 Si ya existía un timer para este pedido, límpialo
-  const prevTo = temporizadoresOferta.get(pedidoCreado.id);
-  if (prevTo) { clearTimeout(prevTo); temporizadoresOferta.delete(pedidoCreado.id); }
-
-  // 6) Avisar al cliente (todavía NO hay conversación)
-  await this.enviarMensajeTexto(
-    telClienteNorm,
-    '⏳ Estamos procesando tu domicilio. Gracias por preferirnos.'
-  );
-  await this.mostrarMenuPostConfirmacion(
-    telClienteNorm,
-    pedidoCreado.id,
-    '⏳ Si ya no lo necesitas, puedes cancelar:',
-    60 * 1000
-  );
-
-  // 7) Timeout de oferta: si el domi NO responde en 2 min
-  const domiId = domiciliario.id; // captura seguras
-  const domiTel = domTelKey;
-
-  const to = setTimeout(async () => {
-    try {
-      // revertir a pendiente solo si sigue ofertado (5→0)
-      const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedidoCreado.id);
-      if (volvio) {
-        // liberar domi (defensivo)
-        try { await this.domiciliarioService.liberarDomiciliario(domiId); } catch {}
-
-        // limpiar memoria
-        ofertasVigentes.delete(pedidoCreado.id);
-        temporizadoresOferta.delete(pedidoCreado.id);
-
-        this.logger.warn(`⏰ Domi no respondió. Pedido ${pedidoCreado.id} vuelve a pendiente.`);
-
-        // 👉 Enviar botones de cambiar estado al domiciliario YA MISMO
-        try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: domiTel,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                ],
-              },
-            },
-          });
-        } catch (e) {
-          this.logger.warn(`⚠️ Falló envío de botones de estado tras timeout: ${e instanceof Error ? e.message : e}`);
-        }
-
-        // ❌ NO llames aquí al cron para evitar reentrancia; el cron lo tomará en su siguiente vuelta
-        this.reintentarAsignacionPendientes();
-      }
-    } catch (e) {
-      this.logger.error(`Timeout oferta falló para pedido ${pedidoCreado.id}: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      // asegúrate de limpiar el handle del timeout
-      temporizadoresOferta.delete(pedidoCreado.id);
+    // Guarda huella idempotente (para reusar si reingresa el mismo evento)
+    if (pedidoCreado?.id) {
+      st.autoUltimoIdemKey = idemKey;
+      st.autoPedidoId = pedidoCreado.id;
+      st.autoUltimoTs = Date.now();
+      estadoUsuarios.set(telClienteNorm, st);
     }
-  }, OFERTA_TIMEOUT_MS);
 
-  temporizadoresOferta.set(pedidoCreado.id, to);
+    // 2) Intentar tomar un domiciliario del turno
+    let domiciliario: Domiciliario | null = null;
+    try {
+      domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
+    } catch {
+      domiciliario = null;
+    }
+
+    // 2.a) Si NO hay domi → informar cliente y mostrar menú de cancelar
+    if (!domiciliario) {
+
+      if (pedidoCreado?.id) {
+        await this.mostrarMenuPostConfirmacion(
+          telClienteNorm,
+          pedidoCreado.id,
+          '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+        );
+      }
+
+      const st2 = estadoUsuarios.get(telClienteNorm) || {};
+      st2.esperandoAsignacion = true;
+      estadoUsuarios.set(telClienteNorm, st2);
+      return;
+    }
+
+    // 3) Pasar a OFERTADO (5) solo si sigue pendiente (atómico)
+    const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
+      pedidoCreado.id,
+      domiciliario.id
+    );
+
+    if (!ofertado) {
+      // Perdimos carrera; liberar domi y notificar
+      try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
+      await this.enviarMensajeTexto(
+        telClienteNorm,
+        '⏳ Estamos gestionando tu pedido. Te avisaremos apenas asignemos un domiciliario.'
+      );
+      await this.mostrarMenuPostConfirmacion(
+        telClienteNorm,
+        pedidoCreado.id,
+        '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.',
+        60 * 1000
+      );
+      return;
+    }
+
+    // 4) Construir resumen
+    const tipoLinea = '🔁 *Tipo de servicio:* auto';
+    const listaODetalles = textoOriginal ? `📝 *Detalles:*\n${sanearBodyMultiline(textoOriginal)}` : '';
+    const resumenParaDomi = [tipoLinea, listaODetalles].filter(Boolean).join('\n\n');
+
+    const resumenLargo = sanearBodyMultiline(
+      `📦 *Nuevo pedido disponible:*\n\n${resumenParaDomi}\n\n` +
+      `👤 Cliente: *${nombreContacto || 'Cliente'}*\n` +
+      `📞 Teléfono: ${telClienteNorm}`
+    );
+
+    // 5) Enviar OFERTA al domi (texto + botones)
+    await this.enviarOfertaAceptarRechazarConId({
+      telefonoDomi: domiciliario.telefono_whatsapp,
+      pedidoId: pedidoCreado.id,
+      resumenLargo,
+      bodyCorto: '¿Deseas tomar este pedido?',
+    });
+
+    // 🧠 Registrar oferta vigente en memoria (expira en 2 min)
+    const domTelKey = toTelKey(domiciliario.telefono_whatsapp);
+    const OFERTA_TIMEOUT_MS = 120_000;
+    ofertasVigentes.set(pedidoCreado.id, {
+      expira: Date.now() + OFERTA_TIMEOUT_MS,
+      domi: domTelKey,
+    });
+
+    // 🧹 Si ya existía un timer para este pedido, límpialo
+    const prevTo = temporizadoresOferta.get(pedidoCreado.id);
+    if (prevTo) { clearTimeout(prevTo); temporizadoresOferta.delete(pedidoCreado.id); }
+
+    // 6) Avisar al cliente (todavía NO hay conversación)
+    await this.enviarMensajeTexto(
+      telClienteNorm,
+      '⏳ Estamos procesando tu domicilio. Gracias por preferirnos.'
+    );
+    await this.mostrarMenuPostConfirmacion(
+      telClienteNorm,
+      pedidoCreado.id,
+      '⏳ Si ya no lo necesitas, puedes cancelar:',
+      60 * 1000
+    );
+
+    // 7) Timeout de oferta: si el domi NO responde en 2 min
+    const domiId = domiciliario.id; // captura seguras
+    const domiTel = domTelKey;
+
+    const to = setTimeout(async () => {
+      try {
+        // revertir a pendiente solo si sigue ofertado (5→0)
+        const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedidoCreado.id);
+        if (volvio) {
+          // liberar domi (defensivo)
+          try { await this.domiciliarioService.liberarDomiciliario(domiId); } catch { }
+
+          // limpiar memoria
+          ofertasVigentes.delete(pedidoCreado.id);
+          temporizadoresOferta.delete(pedidoCreado.id);
+
+          this.logger.warn(`⏰ Domi no respondió. Pedido ${pedidoCreado.id} vuelve a pendiente.`);
+
+          // 👉 Enviar botones de cambiar estado al domiciliario YA MISMO
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: domiTel,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones de estado tras timeout: ${e instanceof Error ? e.message : e}`);
+          }
+
+          // ❌ NO llames aquí al cron para evitar reentrancia; el cron lo tomará en su siguiente vuelta
+          this.reintentarAsignacionPendientes();
+        }
+      } catch (e) {
+        this.logger.error(`Timeout oferta falló para pedido ${pedidoCreado.id}: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        // asegúrate de limpiar el handle del timeout
+        temporizadoresOferta.delete(pedidoCreado.id);
+      }
+    }, OFERTA_TIMEOUT_MS);
+
+    temporizadoresOferta.set(pedidoCreado.id, to);
+  } finally {
+    // Libera candado siempre
+    const s = estadoUsuarios.get(telClienteNorm) || {};
+    s.creandoAutoPedidoHasta = undefined;
+    estadoUsuarios.set(telClienteNorm, s);
+  }
 }
-
 
 
 
@@ -2946,208 +3218,208 @@ private async procesarAutoPedidoDesde(
 
 
   // 🚀 Crea un pedido a partir del sticker oficial del COMERCIO
-// 🚀 Crea un pedido a partir del sticker oficial del COMERCIO
-// 🚀 Crea un pedido a partir del sticker oficial del COMERCIO (versión corregida)
-private async crearPedidoDesdeSticker(numeroWhatsApp: string, comercio: any, nombreContacto?: string) {
-  // Normaliza números a formato 57XXXXXXXXXX
-  const normalizar = (n: string) => {
-    const digits = (n || '').replace(/\D/g, '');
-    return digits.length === 10 ? `57${digits}` : digits;
-  };
+  // 🚀 Crea un pedido a partir del sticker oficial del COMERCIO
+  // 🚀 Crea un pedido a partir del sticker oficial del COMERCIO (versión corregida)
+  private async crearPedidoDesdeSticker(numeroWhatsApp: string, comercio: any, nombreContacto?: string) {
+    // Normaliza números a formato 57XXXXXXXXXX
+    const normalizar = (n: string) => {
+      const digits = (n || '').replace(/\D/g, '');
+      return digits.length === 10 ? `57${digits}` : digits;
+    };
 
-  const toTelKey = (n: string) => {
-    if ((this as any).toTelKey) return (this as any).toTelKey(n);
-    const d = (n || '').replace(/\D/g, '');
-    return d.length === 10 ? `57${d}` : d; // fallback
-  };
+    const toTelKey = (n: string) => {
+      if ((this as any).toTelKey) return (this as any).toTelKey(n);
+      const d = (n || '').replace(/\D/g, '');
+      return d.length === 10 ? `57${d}` : d; // fallback
+    };
 
-  const telClienteNorm = normalizar(numeroWhatsApp); // quien envió el sticker (comercio)
+    const telClienteNorm = normalizar(numeroWhatsApp); // quien envió el sticker (comercio)
 
-  // 🧾 Datos base del pedido por sticker
-  const detalles =
-    `Pedido creado por *sticker oficial* del comercio:\n` +
-    `🏪 ${comercio?.nombre || '-'}\n` +
-    `📞 ${comercio?.telefono || '-'}\n` +
-    `📌 ${comercio?.direccion || '-'}`;
+    // 🧾 Datos base del pedido por sticker
+    const detalles =
+      `Pedido creado por *sticker oficial* del comercio:\n` +
+      `🏪 ${comercio?.nombre || '-'}\n` +
+      `📞 ${comercio?.telefono || '-'}\n` +
+      `📌 ${comercio?.direccion || '-'}`;
 
-  const origenDireccion = comercio?.direccion ?? '';
-  const telOrigen = comercio?.telefono ?? '';
+    const origenDireccion = comercio?.direccion ?? '';
+    const telOrigen = comercio?.telefono ?? '';
 
-  // 1) Crear SIEMPRE el pedido en PENDIENTE (0) (NO setear domi aquí)
-  const pedidoCreado = await this.domiciliosService.create({
-    mensaje_confirmacion: 'Auto-ingreso (sticker oficial comercio)',
-    estado: 0, // pendiente
-    numero_cliente: telClienteNorm,
-    fecha: new Date().toISOString(),
-    hora: new Date().toTimeString().slice(0, 5),
-    id_cliente: null,
-    id_domiciliario: null,
-    tipo_servicio: 'sticker',
-    origen_direccion: origenDireccion,
-    destino_direccion: '',
-    telefono_contacto_origen: telOrigen,
-    telefono_contacto_destino: '',
-    notas: '',
-    detalles_pedido: detalles,
-    foto_entrega_url: '',
-  });
+    // 1) Crear SIEMPRE el pedido en PENDIENTE (0) (NO setear domi aquí)
+    const pedidoCreado = await this.domiciliosService.create({
+      mensaje_confirmacion: 'Auto-ingreso (sticker oficial comercio)',
+      estado: 0, // pendiente
+      numero_cliente: telClienteNorm,
+      fecha: new Date().toISOString(),
+      hora: new Date().toTimeString().slice(0, 5),
+      id_cliente: null,
+      id_domiciliario: null,
+      tipo_servicio: 'sticker',
+      origen_direccion: origenDireccion,
+      destino_direccion: '',
+      telefono_contacto_origen: telOrigen,
+      telefono_contacto_destino: '',
+      notas: '',
+      detalles_pedido: detalles,
+      foto_entrega_url: '',
+    });
 
-  // 2) Intentar asignar un domi disponible
-  let domiciliario: Domiciliario | null = null;
-  try {
-    domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
-  } catch {
-    domiciliario = null;
-  }
+    // 2) Intentar asignar un domi disponible
+    let domiciliario: Domiciliario | null = null;
+    try {
+      domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
+    } catch {
+      domiciliario = null;
+    }
 
-  // 2.a) Si NO hay domi → queda pendiente, avisa al cliente y menú cancelar
-  if (!domiciliario) {
-    await this.enviarMensajeTexto(telClienteNorm, '🚨');
-    await this.enviarMensajeTexto(
-      telClienteNorm,
-      [
-        '✨ *Aviso importante*',
-        'En este momento *NO TENEMOS DOMICILIARIOS DISPONIBLES*',
-        '',
-        '1️⃣ Puedes *esperar* ⏱️ ~10 minutos o menos.',
-        '2️⃣ O *cancelar* el servicio.',
-      ].join('\n')
+    // 2.a) Si NO hay domi → queda pendiente, avisa al cliente y menú cancelar
+    if (!domiciliario) {
+      await this.enviarMensajeTexto(telClienteNorm, '🚨');
+      await this.enviarMensajeTexto(
+        telClienteNorm,
+        [
+          'Con mucho gusto estamos procesando tu domicilio ✨🛵',
+          '',
+          'En breve te avisaremos cuando asignemos el domiciliario ✅',
+          '',
+          '🙏 Gracias por tu paciencia y confianza.'
+        ].join('\n')
+      );
+
+      if (pedidoCreado?.id) {
+        await this.mostrarMenuPostConfirmacion(
+          telClienteNorm,
+          pedidoCreado.id,
+          '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+        );
+      }
+
+      const st = estadoUsuarios.get(telClienteNorm) || {};
+      st.esperandoAsignacion = true;
+      estadoUsuarios.set(telClienteNorm, st);
+      return;
+    }
+
+    // 3) Pasar a OFERTADO (5) **solo si sigue PENDIENTE** (operación ATÓMICA)
+    const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
+      pedidoCreado.id,
+      domiciliario.id
     );
 
-    if (pedidoCreado?.id) {
+    if (!ofertado) {
+      // Perdimos carrera; libera domi y deja pendiente con aviso al cliente
+      try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
+      await this.enviarMensajeTexto(
+        telClienteNorm,
+        '⏳ Estamos gestionando tu pedido. Te avisaremos apenas asignemos un domiciliario.'
+      );
       await this.mostrarMenuPostConfirmacion(
         telClienteNorm,
         pedidoCreado.id,
-        '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:'
+        '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.',
+        60 * 1000
       );
+      return;
     }
 
-    const st = estadoUsuarios.get(telClienteNorm) || {};
-    st.esperandoAsignacion = true;
-    estadoUsuarios.set(telClienteNorm, st);
-    return;
-  }
-
-  // 3) Pasar a OFERTADO (5) **solo si sigue PENDIENTE** (operación ATÓMICA)
-  const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
-    pedidoCreado.id,
-    domiciliario.id
-  );
-
-  if (!ofertado) {
-    // Perdimos carrera; libera domi y deja pendiente con aviso al cliente
-    try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch {}
+    // 4) Avisar al cliente que estamos ofertando y dar opción de cancelar
     await this.enviarMensajeTexto(
       telClienteNorm,
-      '⏳ Estamos gestionando tu pedido. Te avisaremos apenas asignemos un domiciliario.'
+      '⏳ Estamos *procesando* tu pedido. Gracias por preferirnos'
     );
     await this.mostrarMenuPostConfirmacion(
       telClienteNorm,
       pedidoCreado.id,
-      '⏳ Seguimos buscando un domiciliario. Si ya no lo necesitas, puedes cancelar:',
+      '⏳ Si ya no lo necesitas, puedes cancelar:',
       60 * 1000
     );
-    return;
-  }
 
-  // 4) Avisar al cliente que estamos ofertando y dar opción de cancelar
-  await this.enviarMensajeTexto(
-    telClienteNorm,
-    '⏳ Estamos *procesando* tu pedido. Gracias por preferirnos'
-  );
-  await this.mostrarMenuPostConfirmacion(
-    telClienteNorm,
-    pedidoCreado.id,
-    '⏳ Si ya no lo necesitas, puedes cancelar:',
-    60 * 1000
-  );
+    // 5) Armar resumen para el domi (sin datos sensibles)
+    const resumenParaDomi = this.sanitizeWaBody(
+      [
+        '📦 *Nuevo pedido disponible*',
+        '',
+        comercio?.nombre ? `🏪 *Comercio:* ${comercio.nombre}` : '',
+        origenDireccion ? `📍 *Recoger en:* ${origenDireccion}` : '',
+        telOrigen ? `📞 *Tel:* ${telOrigen}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    );
 
-  // 5) Armar resumen para el domi (sin datos sensibles)
-  const resumenParaDomi = this.sanitizeWaBody(
-    [
-      '📦 *Nuevo pedido disponible*',
-      '',
-      comercio?.nombre ? `🏪 *Comercio:* ${comercio.nombre}` : '',
-      origenDireccion ? `📍 *Recoger en:* ${origenDireccion}` : '',
-      telOrigen ? `📞 *Tel:* ${telOrigen}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n')
-  );
+    // 6) Enviar oferta (texto + botones ACEPTAR/RECHAZAR)
+    await this.enviarOfertaAceptarRechazarConId({
+      telefonoDomi: domiciliario.telefono_whatsapp,
+      pedidoId: pedidoCreado.id,
+      resumenLargo: resumenParaDomi,
+      bodyCorto: '¿Deseas tomar este pedido?',
+    });
 
-  // 6) Enviar oferta (texto + botones ACEPTAR/RECHAZAR)
-  await this.enviarOfertaAceptarRechazarConId({
-    telefonoDomi: domiciliario.telefono_whatsapp,
-    pedidoId: pedidoCreado.id,
-    resumenLargo: resumenParaDomi,
-    bodyCorto: '¿Deseas tomar este pedido?',
-  });
+    // 7) Registrar oferta vigente en memoria (2 minutos)
+    const OFERTA_TIMEOUT_MS = 90_000;
+    const domKey = toTelKey(domiciliario.telefono_whatsapp);
+    ofertasVigentes.set(pedidoCreado.id, {
+      expira: Date.now() + OFERTA_TIMEOUT_MS,
+      domi: domKey,
+    });
 
-  // 7) Registrar oferta vigente en memoria (2 minutos)
-  const OFERTA_TIMEOUT_MS = 90_000;
-  const domKey = toTelKey(domiciliario.telefono_whatsapp);
-  ofertasVigentes.set(pedidoCreado.id, {
-    expira: Date.now() + OFERTA_TIMEOUT_MS,
-    domi: domKey,
-  });
+    // Limpia timeout previo si existía
+    const prev = temporizadoresOferta.get(pedidoCreado.id);
+    if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedidoCreado.id); }
 
-  // Limpia timeout previo si existía
-  const prev = temporizadoresOferta.get(pedidoCreado.id);
-  if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedidoCreado.id); }
+    // 8) Programar timeout: si el domi NO responde, revertir a PENDIENTE, liberar y enviar botones de estado
+    const domiId = domiciliario.id; // captura segura
+    const to = setTimeout(async () => {
+      try {
+        const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedidoCreado.id); // 5→0 atómico
+        if (volvio) {
+          try { await this.domiciliarioService.liberarDomiciliario(domiId); } catch { }
+          ofertasVigentes.delete(pedidoCreado.id);
+          temporizadoresOferta.delete(pedidoCreado.id);
 
-  // 8) Programar timeout: si el domi NO responde, revertir a PENDIENTE, liberar y enviar botones de estado
-  const domiId = domiciliario.id; // captura segura
-  const to = setTimeout(async () => {
-    try {
-      const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedidoCreado.id); // 5→0 atómico
-      if (volvio) {
-        try { await this.domiciliarioService.liberarDomiciliario(domiId); } catch {}
+          this.logger.warn(`⏰ Domi no respondió. Pedido ${pedidoCreado.id} vuelve a pendiente.`);
+          await this.enviarMensajeTexto(domKey, '⏱️ Te demoraste en responder. El pedido ya no está disponible. Cambia tu estado');
+
+          // Botones de estado al domi (inmediato)
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: domKey,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+                  ],
+                },
+              },
+            });
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló envío de botones de estado tras timeout: ${e instanceof Error ? e.message : e}`);
+          }
+
+          // ❌ No forzar el cron aquí para evitar reentrancia
+        } else {
+          // Ya no estaba en 5 (lo aceptaron/rechazaron antes) → limpiar memoria por si acaso
+          ofertasVigentes.delete(pedidoCreado.id);
+          temporizadoresOferta.delete(pedidoCreado.id);
+        }
+      } catch (e) {
+        this.logger.error(`Timeout oferta falló para pedido ${pedidoCreado.id}: ${e instanceof Error ? e.message : e}`);
         ofertasVigentes.delete(pedidoCreado.id);
         temporizadoresOferta.delete(pedidoCreado.id);
-
-        this.logger.warn(`⏰ Domi no respondió. Pedido ${pedidoCreado.id} vuelve a pendiente.`);
-  await this.enviarMensajeTexto(domKey, '⏱️ Te demoraste en responder. El pedido ya no está disponible. Cambia tu estado');
-
-        // Botones de estado al domi (inmediato)
-        try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: domKey,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                ],
-              },
-            },
-          });
-        } catch (e) {
-          this.logger.warn(`⚠️ Falló envío de botones de estado tras timeout: ${e instanceof Error ? e.message : e}`);
-        }
-
-        // ❌ No forzar el cron aquí para evitar reentrancia
-      } else {
-        // Ya no estaba en 5 (lo aceptaron/rechazaron antes) → limpiar memoria por si acaso
-        ofertasVigentes.delete(pedidoCreado.id);
+      } finally {
         temporizadoresOferta.delete(pedidoCreado.id);
       }
-    } catch (e) {
-      this.logger.error(`Timeout oferta falló para pedido ${pedidoCreado.id}: ${e instanceof Error ? e.message : e}`);
-      ofertasVigentes.delete(pedidoCreado.id);
-      temporizadoresOferta.delete(pedidoCreado.id);
-    } finally {
-      temporizadoresOferta.delete(pedidoCreado.id);
-    }
-  }, OFERTA_TIMEOUT_MS);
+    }, OFERTA_TIMEOUT_MS);
 
-  temporizadoresOferta.set(pedidoCreado.id, to);
+    temporizadoresOferta.set(pedidoCreado.id, to);
 
-  // ❌ IMPORTANTE: NO crear conversación aquí. Se crea SOLO cuando el domi acepta.
-}
+    // ❌ IMPORTANTE: NO crear conversación aquí. Se crea SOLO cuando el domi acepta.
+  }
 
 
 
@@ -3466,23 +3738,23 @@ Gracias por tu entrega y compromiso 👏
   // - Rechaza decimales
   // Solo acepta números enteros, sin símbolos ni separadores
   // Requiere al menos 4 cifras (>= 1000)
-private parseMonto(raw?: string): number | null {
-  if (!raw) return null;
+  private parseMonto(raw?: string): number | null {
+    if (!raw) return null;
 
-  // Normaliza: quita espacios y puntos separadores de miles
-  const limpio = String(raw).trim().replace(/\./g, "");
+    // Normaliza: quita espacios y puntos separadores de miles
+    const limpio = String(raw).trim().replace(/\./g, "");
 
-  // Debe quedar solo dígitos
-  if (!/^\d+$/.test(limpio)) return null;
+    // Debe quedar solo dígitos
+    if (!/^\d+$/.test(limpio)) return null;
 
-  // Convierte a número
-  const n = Number(limpio);
+    // Convierte a número
+    const n = Number(limpio);
 
-  // Debe ser al menos 1000 (4 cifras)
-  if (!Number.isFinite(n) || n < 1000) return null;
+    // Debe ser al menos 1000 (4 cifras)
+    if (!Number.isFinite(n) || n < 1000) return null;
 
-  return n;
-}
+    return n;
+  }
 
 
   // 👇 Añade estos helpers dentro de tu ChatbotService
@@ -3603,15 +3875,14 @@ private parseMonto(raw?: string): number | null {
     return t.length > max ? t.slice(0, max - 1) + '…' : t;
   }
 
-private toTelKey(raw?: string): string {
-  if (!raw) return '';
-  const d = raw.replace(/\D/g, '');     // solo dígitos
-  if (d.startsWith('57') && d.length === 12) return d;   // 57 + 10
-  if (d.length === 10) return '57' + d;                   // agrega 57
-  if (raw.startsWith('+57') && d.length === 12) return d; // +57... -> 57...
-  return d;
-}
+  private toTelKey(raw?: string): string {
+    if (!raw) return '';
+    const d = raw.replace(/\D/g, '');     // solo dígitos
+    if (d.startsWith('57') && d.length === 12) return d;   // 57 + 10
+    if (d.length === 10) return '57' + d;                   // agrega 57
+    if (raw.startsWith('+57') && d.length === 12) return d; // +57... -> 57...
+    return d;
+  }
 
 }
-
 
