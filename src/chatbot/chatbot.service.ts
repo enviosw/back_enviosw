@@ -733,13 +733,25 @@ export class ChatbotService {
     }
 
 
-if (estado?.esperandoAsignacion) {
-  // Responder siempre lo mismo sin reiniciar flujo
+// Detectar si viene un button_reply y si es de cancelar
+const btnId =
+  mensaje?.interactive?.type === 'button_reply'
+    ? mensaje.interactive.button_reply.id
+    : '';
+
+const isBtnCancelar =
+  btnId === 'cancelar' ||
+  btnId === 'menu_cancelar' ||
+  /^cancelar_pedido_\d+$/.test(btnId) ||
+  /^menu_cancelar_\d+$/.test(btnId);
+
+// Guard de "esperando asignación", pero NO bloquea los botones de cancelar
+if (estado?.esperandoAsignacion && !isBtnCancelar) {
   await this.enviarMensajeTexto(
     numero,
     '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
   );
-  return; // 👈 Importante: NO avances a los flujos, así no reinicia la conversación
+  return;
 }
 
 
@@ -2593,7 +2605,7 @@ if (estado?.esperandoAsignacion) {
   async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
     const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
 
-    
+
     // Helpers
     const trim = (s?: string) => String(s || '').trim();
 
