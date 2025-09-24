@@ -733,6 +733,15 @@ export class ChatbotService {
     }
 
 
+if (estado?.esperandoAsignacion) {
+  // Responder siempre lo mismo sin reiniciar flujo
+  await this.enviarMensajeTexto(
+    numero,
+    '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
+  );
+  return; // 👈 Importante: NO avances a los flujos, así no reinicia la conversación
+}
+
 
     if (estado?.conversacionId) {
       const conversacion = await this.conversacionRepo.findOne({
@@ -2444,7 +2453,7 @@ export class ChatbotService {
           estado.paso = 2;
           await this.enviarMensajeTexto(
             numero,
-            '✅ Lista realizada.\n\n' +
+            '✅ Ingresa:\n\n' +
             '📍 Dirección de entrega\n' +
             '📞 Número telefónico'
           );
@@ -2584,6 +2593,7 @@ export class ChatbotService {
   async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
     const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
 
+    
     // Helpers
     const trim = (s?: string) => String(s || '').trim();
 
