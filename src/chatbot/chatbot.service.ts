@@ -70,7 +70,7 @@ export class ChatbotService {
 
   private readonly logger = new Logger(ChatbotService.name);
   private isRetryRunning = false; // 🔒 candado antisolape
-  private readonly numeroNotificaciones = '573214161762'; // 👈 número fijo destino
+  private readonly numeroNotificaciones = '573108054942'; // 👈 número fijo destino
   private readonly notifsPrecioCache = new Map<string, number>(); // idempotencia
   private readonly NOTIF_PRECIO_TTL_MS = 300_000; // 5 min para evitar duplicados
 
