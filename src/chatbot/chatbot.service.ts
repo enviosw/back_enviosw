@@ -4044,17 +4044,22 @@ Gracias por tu entrega y compromiso 👏
       // 👇 línea opcional con el valor si viene definido
       const montoLinea =
         (typeof monto === 'number' && Number.isFinite(monto))
-          ? `\n💵 *Valor del domicilio:* ${Math.round(monto).toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })}`
-          : '';
+          ? `\n💵 *Valor del domicilio:* ${Math.round(monto).toLocaleString('es-CO', {
+            style: 'currency',
+            currency: 'COP',
+            minimumFractionDigits: 0
+          })}`
+          : '\n💵 *Valor del domicilio:* $5.000';
 
       const mensajeCliente = [
         '✅ Pedido finalizado con éxito',
-        `💵 Valor del servicio: ${montoLinea || '$5.000'}`,
+        montoLinea,
         '',
         '📲 Para próximos servicios usa siempre 👉 313 408 9563 o domiciliosw.com',
         '',
         '📞 Quejas y sugerencias: 314 242 3130 (Wilber Álvarez)'
       ].join('\n');
+
 
 
       await this.enviarMensajeTexto(cliente, mensajeCliente);
