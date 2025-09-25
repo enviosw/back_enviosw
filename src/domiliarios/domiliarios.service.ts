@@ -232,5 +232,25 @@ async getEstadoPorTelefono(telefono: string): Promise<{ nombre: string; disponib
   };
 }
 
+async setDisponibleManteniendoTurnoById(id: number, disponible = true): Promise<void> {
+  const domi = await this.domiciliarioRepo.findOneBy({ id });
+  if (!domi) {
+    throw new NotFoundException(`No se encontró domiciliario con ID ${id}`);
+  }
+  domi.disponible = disponible;
+  await this.domiciliarioRepo.save(domi); // 👈 persiste de verdad y dispara hooks
+}
+
+
+// ✅ Dejar disponible SIN mover el turno (por teléfono)
+async setDisponibleManteniendoTurnoByTelefono(telefono: string, disponible = true): Promise<void> {
+  const domi = await this.domiciliarioRepo.findOne({ where: { telefono_whatsapp: telefono } });
+  if (!domi) {
+    throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
+  }
+  await this.domiciliarioRepo.update({ id: domi.id }, { disponible });
+}
+
+
 
 }

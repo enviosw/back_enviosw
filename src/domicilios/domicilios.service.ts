@@ -31,6 +31,17 @@ export class DomiciliosService {
     });
   }
 
+  // domicilios.service.ts
+async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
+  return this.domicilioRepo
+    .createQueryBuilder('d')
+    .where('d.numero_cliente = :num', { num: numeroCliente })
+    .andWhere('d.estado IN (:...estados)', { estados: [0, 5] }) // 0=pte, 5=ofertado
+    .orderBy('d.fecha_creacion', 'DESC')
+    .getOne();
+}
+
+
   async find(options: FindManyOptions<Domicilio>): Promise<Domicilio[]> {
     return this.domicilioRepo.find(options);
   }
@@ -284,6 +295,52 @@ async cancelarPorClienteSiNoAsignado(pedidoId: number, motivo: string): Promise<
     (p as any).fecha_cancelacion = new Date();
 
     await repo.save(p);
+    return true;
+  });
+}
+
+async vaciarTablaYReiniciarIds(): Promise<void> {
+  const qr = this.dataSource.createQueryRunner();
+  await qr.connect();
+  await qr.startTransaction();
+
+  try {
+    const { tableName, schema } = this.domicilioRepo.metadata;
+    const qualified = schema ? `"${schema}"."${tableName}"` : `"${tableName}"`;
+
+    // TRUNCATE en Postgres reinicia el IDENTITY/SEQUENCE automáticamente
+    // CASCADE: cuidado, también vacía tablas que referencien esta.
+    await qr.query(`TRUNCATE TABLE ${qualified} RESTART IDENTITY CASCADE;`);
+
+    await qr.commitTransaction();
+  } catch (e) {
+    await qr.rollbackTransaction();
+    throw e;
+  } finally {
+    await qr.release();
+  }
+}
+async marcarEntregadoSiAsignado(pedidoId: number, domiId?: number): Promise<boolean> {
+  return this.dataSource.transaction(async (manager) => {
+    const repo = manager.getRepository(Domicilio);
+
+    const pedido = await repo
+      .createQueryBuilder('d')
+      .setLock('pessimistic_write')
+      .where('d.id = :id', { id: pedidoId })
+      .getOne();
+
+    if (!pedido) return false;
+    if (pedido.estado !== 1) return false; // debe estar ASIGNADO
+
+    // (Opcional) verificar domi que cierra coincide con el asignado
+    if (domiId && (pedido as any).id_domiciliario && (pedido as any).id_domiciliario !== domiId) {
+      return false;
+    }
+
+    pedido.estado = 7; // ENTREGADO
+    (pedido as any).fecha_entrega = new Date();
+    await repo.save(pedido);
     return true;
   });
 }

@@ -8,7 +8,7 @@ import { Domiciliario } from '../domiliarios/entities/domiliario.entity';
 import { Conversacion } from './entities/conversacion.entity';
 import { Repository } from 'typeorm';
 import { Mensaje } from './entities/mensajes.entity';
-import { Cron } from '@nestjs/schedule';
+import { Cron, Interval } from '@nestjs/schedule';
 import { stickerConstants, urlImagenConstants } from '../auth/constants/jwt.constant';
 import { PrecioDomicilio } from './entities/precio-domicilio.entity';
 
@@ -30,6 +30,17 @@ const ofertasVigentes = new Map<number, VigenciaOferta>(); // pedidoId -> vigenc
 const OFERTA_TIMEOUT_MS = 120_000;
 
 
+// 🚀 Crea un pedido a partir del sticker oficial del COMERCIO
+// 🚀 Crea un pedido a partir del sticker oficial del COMERCIO
+// 🚀 Crea un pedido a partir del sticker oficial del COMERCIO (versión corregida)
+// 👇 IDs de botones que usaremos
+const BTN_STICKER_CONFIRM_SI = 'sticker_confirmar_si';
+const BTN_STICKER_CONFIRM_NO = 'sticker_confirmar_no';
+
+const BTN_STICKER_CREAR_SI = 'sticker_crear_otro_si';
+const BTN_STICKER_CREAR_NO = 'sticker_crear_otro_no';
+
+const ESTADOS_ABIERTOS = [0, 5, 1]; // pendiente, ofertado, asignado
 
 
 const ASESOR_PSQR = '573142423130';
@@ -59,6 +70,9 @@ export class ChatbotService {
 
   private readonly logger = new Logger(ChatbotService.name);
   private isRetryRunning = false; // 🔒 candado antisolape
+  private readonly numeroNotificaciones = '573214161762'; // 👈 número fijo destino
+  private readonly notifsPrecioCache = new Map<string, number>(); // idempotencia
+  private readonly NOTIF_PRECIO_TTL_MS = 300_000; // 5 min para evitar duplicados
 
   constructor(
     private readonly comerciosService: ComerciosService, // 👈 Aquí está la inyección
@@ -141,63 +155,16 @@ export class ChatbotService {
   }
 
 
-
-
-  // 🧠 helper: armar resumen desde registro de pedido en BD (no desde "datos")
-  // private generarResumenPedidoDesdePedido(pedido: any): string {
-  //   const recoger = pedido.origen_direccion
-  //     ? `📍 *Recoger en:* ${pedido.origen_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_origen || '-'}`
-  //     : '';
-  //   const entregar = pedido.destino_direccion
-  //     ? `🏠 *Entregar en:* ${pedido.destino_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_destino || '-'}`
-  //     : '';
-  //   const lista = pedido.detalles_pedido
-  //     ? `🛒 *Lista de compras:*\n${pedido.detalles_pedido}`
-  //     : '';
-  //   const tipoTxt = pedido.tipo_servicio ? `\n\n🔁 Tipo de servicio: *${pedido.tipo_servicio}*` : '';
-  //   return [recoger, entregar, lista].filter(Boolean).join('\n\n') + tipoTxt;
-  // }
-
-  // 🧠 helper: armar resumen desde registro de pedido en BD (con trato especial a "sticker")
-  // private generarResumenPedidoDesdePedido(pedido: any): string {
-  //   const esSticker = String(pedido?.tipo_servicio || '').toLowerCase() === 'sticker';
-
-  //   if (esSticker) {
-  //     // ⚡ Pedido rápido por sticker: solo lo mínimo para el domiciliario
-  //     const recoger = pedido.origen_direccion
-  //       ? `📍 Recoger: ${pedido.origen_direccion}`
-  //       : '';
-  //     const tel = pedido.telefono_contacto_origen
-  //       ? `📞 Tel: ${pedido.telefono_contacto_origen}`
-  //       : '';
-
-  //     return ['⚡ Pedido rápido (sticker)', recoger, tel]
-  //       .filter(Boolean)
-  //       .join('\n');
-  //   }
-
-  //   // 🧾 Comportamiento normal para los demás tipos
-  //   const recoger = pedido.origen_direccion
-  //     ? `📍 *Recoger en:* ${pedido.origen_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_origen || '-'}`
-  //     : '';
-  //   const entregar = pedido.destino_direccion
-  //     ? `🏠 *Entregar en:* ${pedido.destino_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_destino || '-'}`
-  //     : '';
-  //   const lista = pedido.detalles_pedido
-  //     ? `🛒 *Lista de compras:*\n${pedido.detalles_pedido}`
-  //     : '';
-  //   const tipoTxt = pedido.tipo_servicio ? `\n\n🔁 Tipo de servicio: *${pedido.tipo_servicio}*` : '';
-
-  //   return [recoger, entregar, lista].filter(Boolean).join('\n\n') + tipoTxt;
-  // }
-
-
   @Cron('0 4 * * *', { timeZone: 'America/Bogota' })
   async cronReiniciarTurnos(): Promise<void> {
     this.logger.log('🔄 Iniciando reinicio diario de turnos (4:00 AM).');
     try {
       await this.domiciliarioService.reiniciarTurnosACeroYNoDisponibles();
       this.logger.log('✅ Reinicio de turnos completado (turno_orden=0, disponible=false).');
+
+      await this.domiciliosService.vaciarTablaYReiniciarIds(); // <-- método Opción A (Postgres)
+
+      this.logger.log('✅ Reinicio de domicilios');
     } catch (err: any) {
       this.logger.error(`❌ Falló el reinicio de turnos: ${err?.message || err}`);
     }
@@ -205,7 +172,8 @@ export class ChatbotService {
 
 
 
-  @Cron('*/1 * * * *') // cada 1 minutos
+
+  @Interval(20000) // cada 20,000 ms = 20 s
   async reintentarAsignacionPendientes(): Promise<void> {
 
     const now = Date.now();
@@ -357,15 +325,28 @@ export class ChatbotService {
             try {
               const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedido.id); // 5 -> 0
               if (volvio) {
+                // Avisar al domiciliario que la oferta expiró
+                try {
+                  const domi = await this.domiciliarioService.getById(domiciliario.id);
+                  const tel = domi?.telefono_whatsapp;
+                  if (tel) {
+                    await this.enviarMensajeTexto(
+                      tel,
+                      '⏱️ La oferta expiró y fue asignada a otro domiciliario. Por favor no la aceptes ya.'
+                    );
+                  }
+                } catch (e) {
+                  this.logger.warn(`No pude notificar al domi ${domiciliario.id}: ${e instanceof Error ? e.message : e}`);
+                }
+
                 // (defensivo) liberar domi atado a la oferta
-                try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
+                // ✅ marcar disponible SIN mover turno
+                try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch { }
 
                 this.logger.warn(`⏰ Domi no respondió. Pedido ${pedido.id} vuelve a pendiente.`);
                 ofertasVigentes.delete(pedido.id);
-
-                this.reintentarAsignacionPendientes(); // empuja nuevo intento
               }
-              // Si no "volvió", es porque ya NO está en OFERTADO (p. ej. fue ASIGNADO o CANCELADO) → no hacer nada
+              // Si no "volvió", es porque ya NO está en OFERTADO (ej: fue ASIGNADO o CANCELADO)
             } catch (e: any) {
               this.logger.error(`Timeout oferta falló para pedido ${pedido.id}: ${e?.message || e}`);
             } finally {
@@ -373,6 +354,7 @@ export class ChatbotService {
               temporizadoresOferta.delete(pedido.id);
             }
           }, 120_000);
+
 
           // 🗂️ Registra el timeout para poder cancelarlo si el domi acepta o rechaza antes
           temporizadoresOferta.set(pedido.id, to);
@@ -475,6 +457,48 @@ export class ChatbotService {
       }
     }
 
+    // ── Normaliza a la clave de teléfono (57 + 10 dígitos)
+const numeroKey =
+  this.toKey ? this.toKey(numero) : (numero || '').replace(/\D/g, '').replace(/^(\d{10})$/, '57$1');
+
+// Detecta temprano si el mensaje actual es un botón de "cancelar" para NO bloquear esa acción
+const btnIdEarly =
+  mensaje?.interactive?.type === 'button_reply'
+    ? mensaje.interactive.button_reply.id
+    : '';
+const isBtnCancelarEarly =
+  btnIdEarly === 'cancelar' ||
+  btnIdEarly === 'menu_cancelar' ||
+  /^cancelar_pedido_\d+$/.test(btnIdEarly) ||
+  /^menu_cancelar_\d+$/.test(btnIdEarly);
+
+// 💡 Rehidratación: si el cliente tiene un pedido en 0 o 5, activa el flag en memoria
+try {
+  let stMem = estadoUsuarios.get(numeroKey) || {};
+  if (!stMem.esperandoAsignacion) {
+    const pedido = await this.domiciliosService.getPedidoEnProceso(numeroKey); // 0/5
+    if (pedido) {
+      stMem.esperandoAsignacion = true;
+      stMem.pedidoId = pedido.id; // opcional: te sirve para “cancelar”
+      estadoUsuarios.set(numeroKey, stMem);
+    }
+  }
+} catch (e) {
+  this.logger.warn(
+    `⚠️ Rehidratación de pedido en proceso falló para ${numeroKey}: ${e instanceof Error ? e.message : e}`
+  );
+}
+
+// 🛡️ Guard: si hay pedido en 0/5, responde “procesando” (pero NO bloquea cancelar)
+const stNow = estadoUsuarios.get(numeroKey);
+if (stNow?.esperandoAsignacion && !isBtnCancelarEarly && !stNow?.conversacionId) {
+  await this.enviarMensajeTexto(
+    numero,
+    '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
+  );
+  return;
+}
+
 
     // --- CAPTURA DE PRECIO EN CURSO ---
     {
@@ -484,7 +508,20 @@ export class ChatbotService {
       if (tipo === 'text' && stLocal?.capturandoPrecio && !stLocal?.conversacionFinalizada) {
         const monto = this.parseMonto(texto || '');
         if (monto === null) {
-          await this.enviarMensajeTexto(numero, '❌ No pude leer el valor. Intenta de nuevo, ejemplo: 15000 o 12.500');
+          await this.enviarMensajeTexto(
+            numero,
+            '❌ No pude leer el valor. Intenta de nuevo, ejemplo: 15000 o 12.500'
+          );
+          return;
+        }
+
+        // ✅ Validación de mínimo
+        if (monto < 5000) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ El precio mínimo del domicilio es *5.000*. Ingresa un valor igual o mayor. Ejemplos: 5000, 5.000, 12.500'
+          );
+          // seguimos en modo captura (no cambiamos flags) para que el usuario reingrese el valor
           return;
         }
 
@@ -509,7 +546,6 @@ export class ChatbotService {
               buttons: [
                 { type: 'reply', reply: { id: 'confirmar_precio_si', title: '✅ Sí, Finalizar' } },
                 { type: 'reply', reply: { id: 'confirmar_precio_no', title: '↩️ No, reingresar' } },
-
               ],
             },
           },
@@ -517,6 +553,7 @@ export class ChatbotService {
 
         return; // detenemos el flujo normal hasta confirmar
       }
+
     }
 
 
@@ -733,26 +770,26 @@ export class ChatbotService {
     }
 
 
-// Detectar si viene un button_reply y si es de cancelar
-const btnId =
-  mensaje?.interactive?.type === 'button_reply'
-    ? mensaje.interactive.button_reply.id
-    : '';
+    // Detectar si viene un button_reply y si es de cancelar
+    const btnId =
+      mensaje?.interactive?.type === 'button_reply'
+        ? mensaje.interactive.button_reply.id
+        : '';
 
-const isBtnCancelar =
-  btnId === 'cancelar' ||
-  btnId === 'menu_cancelar' ||
-  /^cancelar_pedido_\d+$/.test(btnId) ||
-  /^menu_cancelar_\d+$/.test(btnId);
+    const isBtnCancelar =
+      btnId === 'cancelar' ||
+      btnId === 'menu_cancelar' ||
+      /^cancelar_pedido_\d+$/.test(btnId) ||
+      /^menu_cancelar_\d+$/.test(btnId);
 
-// Guard de "esperando asignación", pero NO bloquea los botones de cancelar
-if (estado?.esperandoAsignacion && !isBtnCancelar) {
-  await this.enviarMensajeTexto(
-    numero,
-    '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
-  );
-  return;
-}
+    // Guard de "esperando asignación", pero NO bloquea los botones de cancelar
+    if (estado?.esperandoAsignacion && !isBtnCancelar) {
+      await this.enviarMensajeTexto(
+        numero,
+        '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
+      );
+      return;
+    }
 
 
     if (estado?.conversacionId) {
@@ -1127,78 +1164,28 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
         if (pedidoCheck.estado === 1) { // ASIGNADO
           await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue asignado, no puedes aceptarlo.');
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (asignado): ${e?.message || e}`);
-          }
+          await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
+          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
           procesados.set(key, now);
           return;
         }
 
         if (pedidoCheck.estado === 2) { // CANCELADO
           await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue cancelado, no está disponible.');
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Deseas seguir disponible para otros pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (cancelado): ${e?.message || e}`);
-          }
+          await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
+          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
           procesados.set(key, now);
           return;
         }
 
-        if (pedidoCheck.estado !== 5) { // NO OFERTADO
+        if (pedidoCheck.estado !== 5) { // NO OFERTADO u otro
           await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no está disponible.');
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (no ofertado): ${e?.message || e}`);
-          }
+          await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
+          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
           procesados.set(key, now);
           return;
         }
+
 
         // ✅ Resolver domi (mínimo: que exista)
         const domi = await this.domiciliarioService.getByTelefono(numero);
@@ -1301,6 +1288,7 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
       }
 
 
+      // ======================= RECHAZAR PEDIDO =======================
       const matchRechazar = id.match(/^(?:RECHAZAR|rechazar_pedido)_(\d+)$/);
       if (matchRechazar) {
         const pedidoId = Number(matchRechazar[1]);
@@ -1356,24 +1344,11 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         if (pedidoCheck.estado === 1) { // ASIGNADO
           await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue asignado, no puedes rechazarlo.');
           try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
+            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
           } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (asignado): ${e?.message || e}`);
+            this.logger.warn(`⚠️ Falló al actualizar disponibilidad (asignado): ${e?.message || e}`);
           }
+          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
           procesados.set(key, now);
           return;
         }
@@ -1381,24 +1356,11 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         if (pedidoCheck.estado === 2) { // CANCELADO
           await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue cancelado.');
           try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
+            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
           } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (cancelado): ${e?.message || e}`);
+            this.logger.warn(`⚠️ Falló al actualizar disponibilidad (cancelado): ${e?.message || e}`);
           }
+          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
           procesados.set(key, now);
           return;
         }
@@ -1406,27 +1368,18 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         if (pedidoCheck.estado !== 5) { // NO OFERTADO
           await this.enviarMensajeTexto(numero, '⏱️ Te demoraste en responder. El pedido ya no está disponible.');
           try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
+            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
           } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (no ofertado): ${e?.message || e}`);
+            this.logger.warn(`⚠️ Falló al actualizar disponibilidad (no ofertado): ${e?.message || e}`);
           }
+          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
           procesados.set(key, now);
           return;
         }
+
+        // ⛳️ **GUARDA EL DOMI ANTES DE REVERTIR** (porque luego puede quedar en null)
+        const pedidoAntes = await this.getPedidoById(pedidoId);
+        const domiIdOriginal = pedidoAntes?.id_domiciliario ?? null;
 
         // 🚦 Intento atómico: revertir solo si sigue en estado OFERTADO (5)
         const ok = await this.domiciliosService.volverAPendienteSiOfertado(pedidoId);
@@ -1441,44 +1394,132 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         const t = temporizadoresOferta?.get?.(pedidoId);
         if (t) { clearTimeout(t); temporizadoresOferta.delete(pedidoId); }
 
-        // ✅ Liberar domi si estaba atado
+        // ✅ Marcar domi DISPONIBLE manteniendo turno (usando el domi cacheado)
         try {
-          const pedido = await this.getPedidoById(pedidoId);
-          if (pedido?.id_domiciliario) {
-            await this.domiciliarioService.liberarDomiciliario(pedido.id_domiciliario);
+          if (domiIdOriginal) {
+            await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiIdOriginal, true);
+            // (opcional) verificar y loguear
+            // const check = await this.domiciliarioService.getById(domiIdOriginal);
+            // this.logger.log(`Domi ${domiIdOriginal} disponible=${check?.disponible}`);
+          } else {
+            // Fallback: por si ya estaba null, usa el teléfono del domi que rechazó
+            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
           }
         } catch (e) {
-          this.logger.warn(`No se pudo liberar domi tras rechazo en pedido ${pedidoId}: ${e instanceof Error ? e.message : e}`);
+          this.logger.warn(`No se pudo marcar disponible (manteniendo turno) tras rechazo en pedido ${pedidoId}: ${e instanceof Error ? e.message : e}`);
         }
 
         // Mensaje al domiciliario
-        await this.enviarMensajeTexto(numero, '❌ Has rechazado el pedido.');
+        await this.enviarMensajeTexto(
+          numero,
+          '❌ Has rechazado el pedido. Quedaste *DISPONIBLE* y conservas tu *turno*.'
+        );
+
+        // Reintentar asignación a otros domis (tu flujo actual)
+        return;
+      }
+      // ===================== FIN RECHAZAR PEDIDO =====================
+
+
+      // ====== HANDLERS DE BOTONES DEL FLUJO STICKER ======
+
+      /** Anti-doble click: 3s de ventana */
+      const CLICK_GUARD_MS = 3000;
+      const clickGuard = new Map<string, number>(); // key = `${numeroKey}:${id}`
+
+      // Utilidad local
+      const canProceedClick = (numeroKey: string, btnId: string) => {
+        const k = `${numeroKey}:${btnId}`;
+        const now = Date.now();
+        const last = clickGuard.get(k) || 0;
+        if (now - last < CLICK_GUARD_MS) return false;
+        clickGuard.set(k, now);
+        return true;
+      };
+
+      // 1) Confirmación previa del sticker (NO crear aún)
+      if (id === BTN_STICKER_CONFIRM_SI) {
+        const numeroKey = this.toKey(numero);
+        if (!canProceedClick(numeroKey, id)) return;
+
+        const st = estadoUsuarios.get(numeroKey) || {};
+        const payload = st.stickerConfirmPayload || null;
+
+        // Marca que confirmó
+        st.stickerConfirmCreate = true;
+        estadoUsuarios.set(numeroKey, st);
 
         try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: numero,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                ],
-              },
-            },
-          });
-        } catch (e) {
-          this.logger.warn(`⚠️ Falló envío de botones (rechazo): ${e?.message || e}`);
-        }
+          // Si tenemos snapshot del comercio úsalo; de lo contrario, deja que el método lo resuelva con el número
+          const comercioSnap = payload?.comercioSnap ?? undefined;
+          const nombreContacto = payload?.nombreContacto ?? undefined;
 
-        // Reintentar asignación a otros domis
-        setTimeout(() => this.reintentarAsignacionPendientes(), 1000);
+          await this.crearPedidoDesdeSticker(numeroKey, comercioSnap, nombreContacto);
+        } finally {
+          // limpieza suave
+          const st2 = estadoUsuarios.get(numeroKey) || {};
+          delete st2.stickerConfirmPayload;
+          estadoUsuarios.set(numeroKey, st2);
+        }
         return;
       }
 
+      if (id === BTN_STICKER_CONFIRM_NO) {
+        const numeroKey = this.toKey(numero);
+        if (!canProceedClick(numeroKey, id)) return;
+
+        const st = estadoUsuarios.get(numeroKey) || {};
+        delete st.stickerConfirmCreate;
+        delete st.stickerConfirmPayload;
+        estadoUsuarios.set(numeroKey, st);
+
+        await this.enviarMensajeTexto(numeroKey, '👍 Operación cancelada.');
+        return;
+      }
+
+      // 2) Segunda confirmación cuando ya hay un pedido abierto
+      if (id === BTN_STICKER_CREAR_SI) {
+        const numeroKey = this.toKey(numero);
+        if (!canProceedClick(numeroKey, id)) return;
+
+        const st = estadoUsuarios.get(numeroKey) || {};
+
+        // Marcar que el usuario confirmó forzar la creación
+        st.stickerForceCreate = true;
+        estadoUsuarios.set(numeroKey, st);
+
+        // Recuperar snapshot guardado (puede no estar si se perdió memoria)
+        const payload = st.stickerForcePayload || null;
+        const comercioSnap = payload?.comercioSnap ?? undefined;
+        const nombreContacto = payload?.nombreContacto ?? undefined;
+
+        try {
+          await this.crearPedidoDesdeSticker(numeroKey, comercioSnap, nombreContacto);
+        } finally {
+          // Limpieza y quitar bandera
+          const st2 = estadoUsuarios.get(numeroKey) || {};
+          st2.stickerForceCreate = false;
+          delete st2.stickerForcePayload;
+          estadoUsuarios.set(numeroKey, st2);
+        }
+        return;
+      }
+
+      if (id === BTN_STICKER_CREAR_NO) {
+        const numeroKey = this.toKey(numero);
+        if (!canProceedClick(numeroKey, id)) return;
+
+        const st = estadoUsuarios.get(numeroKey) || {};
+        delete st.stickerForceCreate;
+        delete st.stickerForcePayload;
+        estadoUsuarios.set(numeroKey, st);
+
+        await this.enviarMensajeTexto(
+          numeroKey,
+          '👍 Operación cancelada. Si necesitas un domicilio, envía el sticker de nuevo cuando quieras.'
+        );
+        return;
+      }
 
 
       // =========================
@@ -1584,38 +1625,98 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         const s = estadoUsuarios.get(numero) || {};
         const conversacionId = s?.conversacionId;
 
-        if (!conversacionId || typeof s?.precioTmp !== 'number') {
-          await this.enviarMensajeTexto(numero, '⚠️ No encontré el precio o la conversación para finalizar.');
+        // 1) Validaciones básicas de estado
+        if (!conversacionId) {
+          await this.enviarMensajeTexto(numero, '⚠️ No encontré la conversación para finalizar.');
+          return;
+        }
+        if (typeof s?.precioTmp !== 'number' || !Number.isFinite(s.precioTmp)) {
+          await this.enviarMensajeTexto(numero, '⚠️ No encontré un precio válido para finalizar.');
           return;
         }
 
+        // 2) Validar/normalizar precio (2 decimales, > 0 y razonable)
+        const monto = Math.round(s.precioTmp * 100) / 100;
+        if (monto <= 0) {
+          await this.enviarMensajeTexto(numero, '⚠️ El precio debe ser mayor a 0.');
+          return;
+        }
+        if (monto > 10_000_000) {
+          await this.enviarMensajeTexto(numero, '⚠️ El precio es demasiado alto. Verifica e intenta de nuevo.');
+          return;
+        }
+        const costoStr = monto.toFixed(2);
+
+        // 3) Validar conversación y que el mismo domiciliario confirme
         const conv = await this.conversacionRepo.findOne({ where: { id: conversacionId } });
         if (!conv) {
           await this.enviarMensajeTexto(numero, '⚠️ No se encontró la conversación en el sistema.');
           return;
         }
-        if (numero !== conv.numero_domiciliario) {
+        const numeroKey = this.toKey(numero); // normaliza igual que en DB
+        const convNumeroKey = this.toKey(conv.numero_domiciliario || '');
+        if (numeroKey !== convNumeroKey) {
           await this.enviarMensajeTexto(numero, '⛔ Solo el domiciliario puede finalizar este pedido.');
           return;
         }
 
-        try {
-          const numeroKey = this.toKey(numero);
-          await this.precioRepo.save({
-            numero_domiciliario: numeroKey,
-            costo: s.precioTmp.toFixed(2),
-          });
-        } catch (e) {
-          this.logger.error(`❌ Error guardando precio: ${e instanceof Error ? e.message : e}`);
-          await this.enviarMensajeTexto(numero, '⚠️ No pude guardar el precio. Intenta confirmar nuevamente.');
+        // 4) Idempotencia
+        const idemKey = `precio:${conversacionId}:${numeroKey}:${costoStr}`;
+        const now = Date.now();
+        const last = this.notifsPrecioCache.get(idemKey) || 0;
+        if (now - last < this.NOTIF_PRECIO_TTL_MS) {
+          this.logger.warn(`🔁 Confirmación de precio duplicada omitida para ${idemKey}`);
+          const { ok, msg } = await this.finalizarConversacionPorDomi(conversacionId, monto);
+          if (!ok) {
+            await this.enviarMensajeTexto(numero, `❌ No fue posible finalizar: ${msg || 'Error desconocido'}`);
+          }
           return;
         }
 
+        // 5) Guardar y notificar (con nombre)
+        try {
+          // 🔎 Obtener el domiciliario por teléfono
+          // Asegúrate de que telefono_whatsapp en BD tenga el mismo formato que numeroKey
+          const domi = await this.domiciliarioService.getByTelefono(numeroKey);
+          const nombreDomi = domi?.nombre || 'N/D';
+          const apellidoomi = domi?.apellido || 'N/D';
+          const numeroChaq = domi?.numero_chaqueta || 'N/D';
+
+          // Guardar en BD (agrega el campo si existe en tu entidad)
+          await this.precioRepo.save({
+            numero_domiciliario: numeroKey,
+            costo: costoStr,
+          });
+
+          // Notificación a tu número fijo
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: this.numeroNotificaciones,
+            type: 'text',
+            text: {
+              body: `📦 Precio confirmado
+👤 Domiciliario: ${nombreDomi} ${apellidoomi ?? ''}
+🅽 Chaqueta: ${numeroChaq ?? ''}
+📱 Número: ${numeroKey}
+💲 Costo: ${costoStr}
+`,
+            },
+          });
+
+          // marcar idempotencia
+          this.notifsPrecioCache.set(idemKey, now);
+
+        } catch (e) {
+          this.logger.error(`❌ Error guardando/notificando precio: ${e instanceof Error ? e.message : e}`);
+          await this.enviarMensajeTexto(numero, '⚠️ No pude guardar o notificar el precio. Intenta confirmar nuevamente.');
+          return;
+        }
+
+        // 6) Cerrar flags de estado y finalizar conversación
         s.confirmandoPrecio = false;
         s.capturandoPrecio = false;
         s.conversacionFinalizada = true;
         estadoUsuarios.set(numero, s);
-        const monto = s.precioTmp;
 
         const { ok, msg } = await this.finalizarConversacionPorDomi(conversacionId, monto);
         if (!ok) {
@@ -1623,6 +1724,8 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         }
         return;
       }
+
+
 
       if (id === 'cambiar_a_disponible' || id === 'cambiar_a_no_disponible') {
         const disponible = id === 'cambiar_a_disponible';
@@ -1878,16 +1981,35 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
             try {
               const p = await this.getPedidoById(pedidoOfertado.id);
               if (p?.estado === 5) {
-                if (p.id_domiciliario) {
-                  try { await this.domiciliarioService.liberarDomiciliario(p.id_domiciliario); } catch { }
+                // ⚠️ Avisar al domiciliario que la oferta expiró / se reasignó
+                const domiId = p.id_domiciliario;
+                if (domiId) {
+                  try {
+                    const domi = await this.domiciliarioService.getById(domiId);
+                    const tel = domi?.telefono_whatsapp;
+                    if (tel) {
+                      await this.enviarMensajeTexto(
+                        tel,
+                        '⏱️ La oferta expiró y fue asignada a otro domiciliario. Por favor no la aceptes ya.'
+                      );
+                    }
+                  } catch (e) {
+                    this.logger.warn(`No pude notificar al domi ${domiId}: ${e instanceof Error ? e.message : e}`);
+                  }
+
+                  // liberar su estado, si aplica
+                  try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiId, true); } catch { }
+
                 }
+
+                // Pasar el pedido a pendiente para reofertar
                 await this.domiciliosService.update(p.id, {
                   estado: 0,
                   id_domiciliario: null,
                   motivo_cancelacion: 'No respuesta de domiciliario',
                 });
+
                 this.logger.warn(`⏰ Domi no respondió. Reofertando pedido id=${p.id}`);
-                this.reintentarAsignacionPendientes();
               }
             } catch (e) {
               this.logger.error(`Timeout oferta falló para pedido ${pedidoOfertado.id}: ${e?.message || e}`);
@@ -2118,7 +2240,7 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
 
 
-  private async enviarMensajeTexto(numero: string, mensaje: string): Promise<void> {
+  private async enviarMensajeTexto(numero: string, mensaje?: string): Promise<void> {
     try {
       const response = await axiosWhatsapp.post('/messages', {
         messaging_product: 'whatsapp',
@@ -2203,29 +2325,65 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
     // Helpers
     const trim = (s?: string) => String(s || '').trim();
 
-    // Extrae el ÚLTIMO teléfono (7+ dígitos); tolera espacios, guiones, paréntesis, +57, etc.
-    const extraerTelefono = (txt?: string): string | null => {
+    /**
+     * Extrae el ÚLTIMO teléfono válido de 10 dígitos desde el texto completo.
+     * - Acepta cualquier formato: con espacios, guiones, paréntesis, puntos, +57 / 57, o pegado a otros números.
+     * - Regla: toma SIEMPRE los últimos 10 dígitos del conjunto total de dígitos del mensaje.
+     * - Si el texto no tiene al menos 10 dígitos en total, retorna null.
+     */
+    const extraerTelefono10 = (txt?: string): string | null => {
       if (!txt) return null;
-      const compact = String(txt).replace(/[^\d]/g, ' ').replace(/\s+/g, ' ').trim();
-      const grupos = compact.split(' ').filter(x => /^\d{7,}$/.test(x));
-      if (!grupos.length) return null;
-      return grupos[grupos.length - 1];
+      const digits = (String(txt).match(/\d/g) || []).join('');
+      if (digits.length < 10) return null;
+      return digits.slice(-10);
     };
 
-    // Quita del texto la PRIMERA ocurrencia del teléfono (en varios formatos comunes) y devuelve la dirección
-    const quitarTelefonoDelTexto = (txt: string, tel: string): string => {
-      if (!txt || !tel) return txt;
-      const t = tel.replace(/\D/g, '');
-      const patrones = [
-        t,
-        t.replace(/(\d{3})(\d{3})(\d{4,})/, '$1 $2 $3'),
-        t.replace(/(\d{3})(\d{3})(\d{4,})/, '$1-$2-$3'),
-        t.replace(/(\d{3})(\d{7,})/, '$1 $2'),
-        t.replace(/(\d{3})(\d{7,})/, '$1-$2'),
-        `(${t.slice(0, 3)}) ${t.slice(3)}`,
-        `+57${t}`, `57${t}`
-      ].map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    /**
+     * Quita del texto la PRIMERA ocurrencia del teléfono (10 dígitos normalizados) en formatos comunes:
+     * - 10 seguidos
+     * - 3-3-4, 3-7
+     * - 3-3-2-2 (ej: 310 885 73 11) y otras variantes frecuentes
+     * - con paréntesis en los 3 primeros
+     * - con prefijos 57 / +57 (pegado y con separadores)
+     */
+    const quitarTelefonoDelTexto = (txt: string, t10: string): string => {
+      if (!txt || !t10) return txt;
 
+      const variantes = [
+        // 10 seguidos
+        t10,
+
+        // 3-3-4
+        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1 $2 $3'),
+        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3'),
+
+        // 3-7
+        t10.replace(/(\d{3})(\d{7})/, '$1 $2'),
+        t10.replace(/(\d{3})(\d{7})/, '$1-$2'),
+
+        // 3-3-2-2 (ej: 310 885 73 11)
+        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1-$2-$3-$4'),
+
+        // Otras particiones frecuentes de 10
+        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
+
+        // Paréntesis
+        `(${t10.slice(0, 3)}) ${t10.slice(3)}`,
+
+        // Prefijos con 57 / +57 (pegados y con separadores)
+        `57${t10}`, `57 ${t10}`, `57-${t10}`,
+        `+57${t10}`, `+57 ${t10}`, `+57-${t10}`,
+      ];
+
+      const patrones = variantes.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       const re = new RegExp(patrones.join('|'), 'i');
       return trim(txt.replace(re, '').replace(/\s{2,}/g, ' '));
     };
@@ -2236,13 +2394,13 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
     const pedirDireccionRecogida = async () =>
       this.enviarMensajeTexto(
         numero,
-        '📍 Ingresa la *dirección de recogida*. (Puedes enviar la dirección y el teléfono en el mismo mensaje.)'
+        '📍 Ingresa la *dirección de recogida*. (Puedes enviar dirección y teléfono en el mismo mensaje.)'
       );
 
     const pedirTelefonoRecogida = async () =>
       this.enviarMensajeTexto(
         numero,
-        '📞 Ingresa el *teléfono de recogida*.'
+        '📞 Ingresa el *teléfono de recogida* (debe tener *10 dígitos*)'
       );
 
     const enviarResumenYBotones = async () => {
@@ -2273,10 +2431,7 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
     switch (estado.paso) {
       // 0) Pedir dirección (permitir que envíen dirección+tel juntos)
       case 0: {
-        await this.enviarMensajeTexto(
-          numero,
-          '🛵 Tomaremos tus datos de *recogida*.'
-        );
+        await this.enviarMensajeTexto(numero, '🛵 Tomaremos tus datos de *recogida*.');
         await pedirDireccionRecogida();
         estado.paso = 1;
         break;
@@ -2284,19 +2439,18 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
       // 1) Guardar dirección y, si viene, teléfono; si falta teléfono, pedirlo
       case 1: {
-        const tel = extraerTelefono(mensaje);
+        const tel10 = extraerTelefono10(mensaje);
         let dir = trim(mensaje);
 
-        if (tel) dir = quitarTelefonoDelTexto(dir, tel);
+        if (tel10) dir = quitarTelefonoDelTexto(dir, tel10);
 
         if (!direccionValida(dir)) {
-          // Si vino solo teléfono, pido la dirección
-          if (tel) {
-            estado.datos.telefonoRecoger = tel;
+          if (tel10) {
+            // Tengo teléfono válido pero falta dirección
+            estado.datos.telefonoRecoger = tel10;
             await this.enviarMensajeTexto(numero, '📞 Teléfono recibido.');
-            await this.enviarMensajeTexto(numero, '⚠️ Ahora envía la *dirección de recogida* (cualquier texto).');
-            // permanecemos en paso 1 hasta que llegue dirección válida
-            break;
+            await this.enviarMensajeTexto(numero, '⚠️ Ahora envía la *dirección de recogida* (mín. 5 caracteres).');
+            break; // seguimos en paso 1 hasta que llegue dirección válida
           }
           await this.enviarMensajeTexto(numero, '⚠️ Dirección inválida. Escribe una dirección (mín. 5 caracteres).');
           await pedirDireccionRecogida();
@@ -2305,9 +2459,8 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
         estado.datos.direccionRecoger = dir;
 
-        if (tel && /^\d{7,}$/.test(tel)) {
-          estado.datos.telefonoRecoger = tel;
-          // Ambos listos → resumen
+        if (tel10) {
+          estado.datos.telefonoRecoger = tel10;
           await enviarResumenYBotones();
           estado.confirmacionEnviada = true;
           estado.paso = 3;
@@ -2322,17 +2475,20 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
       // 2) Guardar teléfono (permitir que reenvíen dirección+tel y actualizamos ambos)
       case 2: {
-        const tel = extraerTelefono(mensaje);
+        const tel10 = extraerTelefono10(mensaje);
         let posibleDir = trim(mensaje);
-        if (tel) posibleDir = quitarTelefonoDelTexto(posibleDir, tel);
+        if (tel10) posibleDir = quitarTelefonoDelTexto(posibleDir, tel10);
 
         let huboCambio = false;
 
-        if (tel && /^\d{7,}$/.test(tel)) {
-          estado.datos.telefonoRecoger = tel;
+        if (tel10) {
+          estado.datos.telefonoRecoger = tel10;
           huboCambio = true;
         } else {
-          await this.enviarMensajeTexto(numero, '⚠️ Teléfono inválido. Ej: 3214327614.');
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Teléfono inválido. Debe tener *10 dígitos*.'
+          );
           await pedirTelefonoRecogida();
           break;
         }
@@ -2343,10 +2499,12 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         }
 
         if (!estado.datos.direccionRecoger) {
-          await this.enviarMensajeTexto(numero, '⚠️ Falta la *dirección de recogida*. Escríbela (cualquier texto).');
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Falta la *dirección de recogida*. Escríbela (mín. 5 caracteres).'
+          );
           await pedirDireccionRecogida();
-          // seguimos en paso 2 hasta tener ambos
-          break;
+          break; // seguimos en paso 2 hasta tener ambos
         }
 
         if (huboCambio) {
@@ -2359,14 +2517,14 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
       // 3) Correcciones: el usuario puede mandar dirección, teléfono o ambos
       case 3: {
-        const tel = extraerTelefono(mensaje);
+        const tel10 = extraerTelefono10(mensaje);
         let dir = trim(mensaje);
-        if (tel) dir = quitarTelefonoDelTexto(dir, tel);
+        if (tel10) dir = quitarTelefonoDelTexto(dir, tel10);
 
         let huboCambio = false;
 
-        if (tel && /^\d{7,}$/.test(tel)) {
-          estado.datos.telefonoRecoger = tel;
+        if (tel10) {
+          estado.datos.telefonoRecoger = tel10;
           huboCambio = true;
         }
         if (direccionValida(dir)) {
@@ -2430,18 +2588,68 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
     const txt = (mensaje ?? '').trim();
 
     // Helpers
-    const extraerTelefono = (t?: string): string | null => {
+
+    /**
+     * Extrae el ÚLTIMO teléfono válido de 10 dígitos desde el texto completo.
+     * - Acepta cualquier formato: con espacios, guiones, paréntesis, puntos, +57 / 57, o pegado a otros números.
+     * - Regla: toma SIEMPRE los últimos 10 dígitos del conjunto total de dígitos del mensaje.
+     * - Si el texto no tiene al menos 10 dígitos en total, retorna null.
+     */
+    const extraerTelefono10 = (t?: string): string | null => {
       if (!t) return null;
-      const all = t.match(/\d{7,}/g); // 7+ dígitos contiguos
-      return all?.length ? all[all.length - 1] : null;
+      const digits = (String(t).match(/\d/g) || []).join('');
+      if (digits.length < 10) return null;
+      return digits.slice(-10);
     };
+
+    /**
+     * Quita del texto la PRIMERA ocurrencia del teléfono detectado (10 dígitos normalizados)
+     * en formatos comunes (con separadores, paréntesis, con/ sin 57/+57).
+     */
+    const quitarTelefonoDelTexto = (texto: string, t10: string) => {
+      if (!texto || !t10) return texto;
+
+      const formats = [
+        // 10 seguidos
+        t10,
+
+        // 3-3-4
+        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1 $2 $3'),
+        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3'),
+
+        // 3-7
+        t10.replace(/(\d{3})(\d{7})/, '$1 $2'),
+        t10.replace(/(\d{3})(\d{7})/, '$1-$2'),
+
+        // 3-3-2-2 (ej: 310 885 73 11)
+        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1-$2-$3-$4'),
+
+        // Otras particiones frecuentes de 10
+        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
+
+        // Paréntesis
+        `(${t10.slice(0, 3)}) ${t10.slice(3)}`,
+
+        // con 57 / +57 (pegados y con separadores)
+        `57${t10}`, `57 ${t10}`, `57-${t10}`,
+        `+57${t10}`, `+57 ${t10}`, `+57-${t10}`,
+      ];
+
+      const patrones = formats.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      const re = new RegExp(patrones.join('|'), 'i');
+      return texto.replace(re, '').replace(/\s{2,}/g, ' ').trim();
+    };
+
     const direccionValida = (t?: string) => !!t && t.trim().length >= 5;
     const esFinLista = (s: string) => /^(listo|fin|ok)$/i.test((s || '').trim());
-    const quitarTelefonoDelTexto = (texto: string, tel: string) => {
-      if (!texto || !tel) return texto;
-      // remueve la primera ocurrencia del bloque de dígitos 7+
-      return texto.replace(tel, '').replace(/\s{2,}/g, ' ').trim();
-    };
 
     switch (estado.paso) {
       // 0) Pedir lista
@@ -2467,10 +2675,8 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
             numero,
             '✅ Ingresa:\n\n' +
             '📍 Dirección de entrega\n' +
-            '📞 Número telefónico'
+            '📞 Número telefónico 10 dígitos'
           );
-
-
           break;
         }
 
@@ -2487,21 +2693,21 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         break;
       }
 
-      // 2) Dirección (cualquier texto) y posible teléfono en el mismo mensaje
+      // 2) Dirección (cualquier texto válido) y posible teléfono en el mismo mensaje
       case 2: {
         if (!txt) {
           await this.enviarMensajeTexto(numero, '⚠️ Escribe la *dirección de entrega*');
           break;
         }
 
-        // Intentar extraer teléfono del mismo mensaje
-        const tel = extraerTelefono(txt);
-        const direccionCruda = tel ? quitarTelefonoDelTexto(txt, tel) : txt;
+        // Intentar extraer teléfono del mismo mensaje (10 dígitos ya normalizados)
+        const tel10 = extraerTelefono10(txt);
+        const direccionCruda = tel10 ? quitarTelefonoDelTexto(txt, tel10) : txt;
 
         if (!direccionValida(direccionCruda)) {
           await this.enviarMensajeTexto(
             numero,
-            '⚠️ Dirección inválida. Escribe una dirección válida'
+            '⚠️ Dirección inválida. Escribe una dirección válida (mín. 5 caracteres).'
           );
           break;
         }
@@ -2509,9 +2715,9 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         // Guardar dirección
         estado.datos.direccionEntrega = direccionCruda;
 
-        if (tel) {
+        if (tel10) {
           // Si vino teléfono válido junto → guardar y saltar al resumen
-          estado.datos.telefonoEntrega = tel;
+          estado.datos.telefonoEntrega = tel10;
           estado.paso = 4;
 
           const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
@@ -2543,19 +2749,25 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
         // Si no vino teléfono, pedirlo
         estado.paso = 3;
-        await this.enviarMensajeTexto(numero, '📞 Ahora envía el *teléfono de entrega*');
+        await this.enviarMensajeTexto(
+          numero,
+          '📞 Ahora envía el *teléfono de entrega* (debe tener *10 dígitos*)'
+        );
         break;
       }
 
       // 3) Teléfono y resumen
       case 3: {
-        const tel = extraerTelefono(txt);
-        if (!tel) {
-          await this.enviarMensajeTexto(numero, '⚠️ Teléfono inválido. Intenta de nuevo');
+        const tel10 = extraerTelefono10(txt);
+        if (!tel10) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Teléfono inválido. Debe tener *10 dígitos*.'
+          );
           break;
         }
 
-        estado.datos.telefonoEntrega = tel;
+        estado.datos.telefonoEntrega = tel10;
         estado.paso = 4;
 
         const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
@@ -2597,6 +2809,8 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
 
 
+
+
   // Versión robusta y tolerante a mensajes “juntos” / reenvíos.
   // - Usa this.extraerDireccionYTelefono(mensaje) para separar dirección y teléfono.
   // - Acepta que el usuario reenvíe la info completa estando en paso 2 (actualiza y re-confirma sin duplicar).
@@ -2605,35 +2819,64 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
   async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
     const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
 
-
     // Helpers
     const trim = (s?: string) => String(s || '').trim();
 
-    // Extrae el ÚLTIMO teléfono (7+ dígitos) del texto; tolera espacios, guiones, paréntesis
-    const extraerTelefono = (txt?: string): string | null => {
+    /**
+     * Extrae el ÚLTIMO teléfono válido de 10 dígitos desde el texto completo.
+     * - Acepta cualquier formato: con espacios, guiones, paréntesis, puntos, +57 / 57, o pegado a otros números.
+     * - Regla: toma SIEMPRE los últimos 10 dígitos del conjunto total de dígitos del mensaje.
+     * - Si el texto no tiene al menos 10 dígitos en total, retorna null.
+     */
+    const extraerTelefono10 = (txt?: string): string | null => {
       if (!txt) return null;
-      // Busca secuencias "compactas" de 7+ dígitos (los formateos los compactamos antes)
-      const compact = String(txt).replace(/[^\d]/g, ' ').replace(/\s+/g, ' ').trim();
-      const grupos = compact.split(' ').filter(x => /^\d{7,}$/.test(x));
-      if (!grupos.length) return null;
-      return grupos[grupos.length - 1]; // el último tiene prioridad (suele ser el tel final)
+      const digits = (String(txt).match(/\d/g) || []).join('');
+      if (digits.length < 10) return null;
+      return digits.slice(-10);
     };
 
-    // Quita del texto la PRIMERA ocurrencia del teléfono (tal como aparece) y devuelve dirección limpia
-    const quitarTelefonoDelTexto = (txt: string, tel: string): string => {
-      if (!txt || !tel) return txt;
-      // Intentos de match del tel en diferentes formateos comunes:
-      const t = tel.replace(/\D/g, '');
-      const patrones = [
-        t,                               // 3001234567
-        t.replace(/(\d{3})(\d{3})(\d{4,})/, '$1 $2 $3'), // 300 123 4567
-        t.replace(/(\d{3})(\d{3})(\d{4,})/, '$1-$2-$3'), // 300-123-4567
-        t.replace(/(\d{3})(\d{7,})/, '$1 $2'),
-        t.replace(/(\d{3})(\d{7,})/, '$1-$2'),
-        `(${t.slice(0, 3)}) ${t.slice(3)}`,
-        `+57${t}`, `57${t}`
-      ].map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    /**
+     * Quita del texto la PRIMERA ocurrencia del teléfono (10 dígitos normalizados) en varios formatos:
+     * con separadores, paréntesis, y con/sin 57 o +57.
+     */
+    const quitarTelefonoDelTexto = (txt: string, t10: string): string => {
+      if (!txt || !t10) return txt;
 
+      const variantes = [
+        // 10 seguidos
+        t10,
+
+        // 3-3-4
+        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1 $2 $3'),
+        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3'),
+
+        // 3-7
+        t10.replace(/(\d{3})(\d{7})/, '$1 $2'),
+        t10.replace(/(\d{3})(\d{7})/, '$1-$2'),
+
+        // 3-3-2-2 (ej: 310 885 73 11)
+        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1-$2-$3-$4'),
+
+        // Otras particiones frecuentes de 10
+        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
+        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
+        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
+
+        // Paréntesis
+        `(${t10.slice(0, 3)}) ${t10.slice(3)}`,
+
+        // con 57 / +57 (pegados y con separadores)
+        `57${t10}`, `57 ${t10}`, `57-${t10}`,
+        `+57${t10}`, `+57 ${t10}`, `+57-${t10}`,
+      ];
+
+      const patrones = variantes.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       const re = new RegExp(patrones.join('|'), 'i');
       return trim(txt.replace(re, '').replace(/\s{2,}/g, ' '));
     };
@@ -2642,10 +2885,16 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
     // Prompts cortos
     const pedirDirRecoger = async () =>
-      this.enviarMensajeTexto(numero, '📍 Ingresa la dirección de *RECOGER* (puedes escribir la dirección y el teléfono en el mismo mensaje si quieres).');
+      this.enviarMensajeTexto(
+        numero,
+        '📍 Ingresa la dirección de *RECOGER* (puedes escribir la dirección y el teléfono en el mismo mensaje).'
+      );
 
     const pedirTelRecoger = async () =>
-      this.enviarMensajeTexto(numero, '📞 Ingresa el teléfono de quien *entrega*');
+      this.enviarMensajeTexto(
+        numero,
+        '📞 Ingresa el *teléfono* de quien *entrega* (debe tener *10 dígitos*).'
+      );
 
     const enviarResumenYBotones = async () => {
       const { direccionRecoger, telefonoRecoger } = estado.datos;
@@ -2688,24 +2937,23 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
       // 1) Guardar dirección y, si viene, teléfono; si no viene tel, pedirlo
       case 1: {
-        const tel = extraerTelefono(mensaje);
+        const tel10 = extraerTelefono10(mensaje);
         let dir = trim(mensaje);
 
-        if (tel) {
-          dir = quitarTelefonoDelTexto(dir, tel);
-          estado.datos.telefonoRecoger = tel;
-          estado.datos.telefonoRecogida = tel; // compat
+        if (tel10) {
+          dir = quitarTelefonoDelTexto(dir, tel10);
+          estado.datos.telefonoRecoger = tel10;
+          estado.datos.telefonoRecogida = tel10; // compat
         }
 
         if (!direccionValida(dir)) {
           // Si no hay dirección pero sí teléfono: guardo tel y pido dirección
-          if (tel) {
-            estado.datos.telefonoRecoger = tel;
-            estado.datos.telefonoRecogida = tel;
+          if (tel10) {
+            estado.datos.telefonoRecoger = tel10;
+            estado.datos.telefonoRecogida = tel10;
             await this.enviarMensajeTexto(numero, '📞 Teléfono recibido.');
-            await this.enviarMensajeTexto(numero, '⚠️ Ahora envía la *dirección de RECOGER* (cualquier texto).');
-            // seguimos pidiendo dirección en este mismo paso
-            break;
+            await this.enviarMensajeTexto(numero, '⚠️ Ahora envía la *dirección de RECOGER* (mín. 5 caracteres).');
+            break; // seguimos pidiendo dirección en este mismo paso
           }
           await this.enviarMensajeTexto(numero, '⚠️ Dirección inválida. Escribe una *dirección válida* (mín. 5 caracteres).');
           await pedirDirRecoger();
@@ -2723,7 +2971,7 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
           break;
         }
 
-        // Si falta teléfono, pedirlo
+        // Falta teléfono → pedirlo
         await pedirTelRecoger();
         estado.paso = 2;
         break;
@@ -2731,16 +2979,16 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
       // 2) Guardar teléfono (permite que el usuario vuelva a mandar dirección+tel; actualizamos ambos si aplica)
       case 2: {
-        const tel = extraerTelefono(mensaje);
+        const tel10 = extraerTelefono10(mensaje);
         // Si el usuario mandó dirección de nuevo junto con el teléfono, la tomamos
         let posibleDir = trim(mensaje);
-        if (tel) posibleDir = quitarTelefonoDelTexto(posibleDir, tel);
+        if (tel10) posibleDir = quitarTelefonoDelTexto(posibleDir, tel10);
 
         let huboCambio = false;
 
-        if (tel && /^\d{7,}$/.test(tel)) {
-          estado.datos.telefonoRecoger = tel;
-          estado.datos.telefonoRecogida = tel;
+        if (tel10) {
+          estado.datos.telefonoRecoger = tel10;
+          estado.datos.telefonoRecogida = tel10;
           huboCambio = true;
         }
         if (direccionValida(posibleDir)) {
@@ -2750,15 +2998,20 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
         }
 
         if (!estado.datos.telefonoRecoger) {
-          await this.enviarMensajeTexto(numero, '⚠️ Teléfono inválido. Envía ejemplo 3214327614.');
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Teléfono inválido. Debe tener *10 dígitos*'
+          );
           await pedirTelRecoger();
           break;
         }
         if (!estado.datos.direccionRecoger) {
-          await this.enviarMensajeTexto(numero, '⚠️ Falta la *dirección de RECOGER*. Escríbela (puede ser cualquier texto).');
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Falta la *dirección de RECOGER*. Escríbela (mín. 5 caracteres).'
+          );
           await pedirDirRecoger();
-          // nos quedamos en paso 2 hasta tener ambos
-          break;
+          break; // nos quedamos en paso 2 hasta tener ambos
         }
 
         // Resumen + botones
@@ -2772,15 +3025,15 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
       case 3: {
         if (!trim(mensaje)) break;
 
-        const tel = extraerTelefono(mensaje);
+        const tel10 = extraerTelefono10(mensaje);
         let dir = trim(mensaje);
-        if (tel) dir = quitarTelefonoDelTexto(dir, tel);
+        if (tel10) dir = quitarTelefonoDelTexto(dir, tel10);
 
         let huboCambio = false;
 
-        if (tel && /^\d{7,}$/.test(tel)) {
-          estado.datos.telefonoRecoger = tel;
-          estado.datos.telefonoRecogida = tel;
+        if (tel10) {
+          estado.datos.telefonoRecoger = tel10;
+          estado.datos.telefonoRecogida = tel10;
           huboCambio = true;
         }
         if (direccionValida(dir)) {
@@ -2829,6 +3082,7 @@ if (estado?.esperandoAsignacion && !isBtnCancelar) {
 
     estadoUsuarios.set(numero, estado);
   }
+
 
 
 
@@ -3257,7 +3511,10 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
     );
 
     if (!ofertado) {
-      try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
+      try {
+        await this.domiciliarioService.liberarDomiciliario(domiciliario.id);
+
+      } catch { }
       await this.enviarMensajeTexto(
         telClienteNorm,
         '⏳ Estamos gestionando tu pedido. Te avisaremos apenas asignemos un domiciliario.'
@@ -3317,11 +3574,11 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       try {
         const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedidoId);
         if (volvio) {
-          try { await this.domiciliarioService.liberarDomiciliario(domiId); } catch { }
+          // ✅ marcar disponible SIN mover turno (en vez de liberar)
+          try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiId, true); } catch { }
           ofertasVigentes.delete(pedidoId);
           temporizadoresOferta.delete(pedidoId);
           this.logger.warn(`⏰ Domi no respondió. Pedido ${pedidoId} vuelve a pendiente.`);
-          this.reintentarAsignacionPendientes();
         }
       } catch (e) {
         this.logger.error(`Timeout oferta falló para pedido ${pedidoId}: ${e instanceof Error ? e.message : e}`);
@@ -3329,6 +3586,7 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
         temporizadoresOferta.delete(pedidoId);
       }
     }, OFERTA_TIMEOUT_MS);
+
 
     temporizadoresOferta.set(pedidoId, to);
   }
@@ -3355,39 +3613,140 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
     temporizadoresInactividad.set(numero, t);
   }
 
+  // 👇 Estados que consideramos "abiertos"
 
-  // 🚀 Crea un pedido a partir del sticker oficial del COMERCIO
-  // 🚀 Crea un pedido a partir del sticker oficial del COMERCIO
-  // 🚀 Crea un pedido a partir del sticker oficial del COMERCIO (versión corregida)
   private async crearPedidoDesdeSticker(numeroWhatsApp: string, comercio: any, nombreContacto?: string) {
-    // Normaliza números a formato 57XXXXXXXXXX
+    // IDs de botones (solo confirmación previa)
+    const BTN_STICKER_CONFIRM_SI = 'sticker_confirmar_si';
+    const BTN_STICKER_CONFIRM_NO = 'sticker_confirmar_no';
+
+    // -------------------- Helpers locales --------------------
     const normalizar = (n: string) => {
       const digits = (n || '').replace(/\D/g, '');
       return digits.length === 10 ? `57${digits}` : digits;
     };
 
-    const toTelKey = (n: string) => {
+    const toTelKeyLocal = (n: string) => {
       if ((this as any).toTelKey) return (this as any).toTelKey(n);
       const d = (n || '').replace(/\D/g, '');
-      return d.length === 10 ? `57${d}` : d; // fallback
+      return d.length === 10 ? `57${d}` : d;
     };
 
-    const telClienteNorm = normalizar(numeroWhatsApp); // quien envió el sticker (comercio)
+    const firstNonEmpty = (...vals: Array<string | null | undefined>): string | null => {
+      for (const v of vals) if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+      return null;
+    };
 
-    // 🧾 Datos base del pedido por sticker
+    // Snapshot de comercio sin placeholders; intenta completar por id y por teléfono del sticker
+    const resolveComercioSnapshot = async (input: any, telSticker: string): Promise<{
+      id?: number;
+      nombre: string | null;
+      telefono: string | null;
+      direccion: string | null;
+    }> => {
+      const init = input ?? {};
+      let id: number | undefined = init?.id;
+      let nombre: string | null = firstNonEmpty(init?.nombre, init?.name, init?.razon_social);
+      let telefono: string | null = firstNonEmpty(init?.telefono, init?.telefono_whatsapp, init?.celular, init?.tel, init?.phone);
+      let direccion: string | null = firstNonEmpty(init?.direccion, init?.direccion_principal, init?.address);
+
+      if (telefono) telefono = toTelKeyLocal(telefono);
+
+      if (id && (!nombre || !telefono || !direccion)) {
+        try {
+          const rec = (await (this.comerciosService as any)?.getById?.(id))
+            ?? (await (this.comerciosService as any)?.findOne?.(id));
+          if (rec) {
+            nombre = nombre ?? firstNonEmpty(rec?.nombre, rec?.name, rec?.razon_social);
+            telefono = telefono ?? firstNonEmpty(rec?.telefono, rec?.telefono_whatsapp, rec?.celular, rec?.tel, rec?.phone);
+            direccion = direccion ?? firstNonEmpty(rec?.direccion, rec?.direccion_principal, rec?.address);
+            if (telefono) telefono = toTelKeyLocal(telefono);
+          }
+        } catch { }
+      }
+
+      if (!nombre || !telefono || !direccion) {
+        try {
+          const telKeySticker = toTelKeyLocal(telSticker);
+          const recByTel =
+            (await (this.comerciosService as any)?.getByTelefono?.(telKeySticker)) ??
+            (await (this.comerciosService as any)?.findByTelefono?.(telKeySticker)) ??
+            (await (this.comerciosService as any)?.getByWhatsapp?.(telKeySticker));
+          if (recByTel) {
+            id = id ?? recByTel.id;
+            nombre = nombre ?? firstNonEmpty(recByTel?.nombre, recByTel?.name, recByTel?.razon_social);
+            telefono = telefono ?? firstNonEmpty(recByTel?.telefono, recByTel?.telefono_whatsapp, recByTel?.celular, recByTel?.tel, recByTel?.phone);
+            direccion = direccion ?? firstNonEmpty(recByTel?.direccion, recByTel?.direccion_principal, recByTel?.address);
+            if (telefono) telefono = toTelKeyLocal(telefono);
+          }
+        } catch { }
+      }
+
+      return { id, nombre: nombre ?? null, telefono: telefono ?? null, direccion: direccion ?? null };
+    };
+    // ----------------------------------------------------------
+
+    const telClienteNorm = normalizar(numeroWhatsApp); // comercio que envía el sticker
+    const cSnap = await resolveComercioSnapshot(comercio, numeroWhatsApp);
+
+    // =========================
+    // 🔒 Confirmación previa (NO crear de una)
+    // =========================
+    const st = estadoUsuarios.get(telClienteNorm) || {};
+    const confirmed = Boolean(st?.stickerConfirmCreate);
+
+    if (!confirmed) {
+      const preview = [
+        '🟢 *Confirmación requerida*',
+        '',
+        cSnap.nombre ? `🏪 *Comercio:* ${cSnap.nombre}` : '',
+        cSnap.direccion ? `📍 *Recoger en:* ${cSnap.direccion}` : '',
+        cSnap.telefono ? `📞 *Tel:* ${cSnap.telefono}` : '',
+        '',
+        '¿Deseas *solicitar ahora* un domiciliario?'
+      ].filter(Boolean).join('\n');
+
+      st.stickerConfirmPayload = { telClienteNorm, comercioSnap: cSnap, nombreContacto: nombreContacto || null };
+      estadoUsuarios.set(telClienteNorm, st);
+
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: telClienteNorm,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: preview },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: BTN_STICKER_CONFIRM_SI, title: '✅ Solicitar ahora' } },
+              { type: 'reply', reply: { id: BTN_STICKER_CONFIRM_NO, title: '❌ Cancelar' } },
+            ],
+          },
+        },
+      });
+      return; // esperar confirmación
+    }
+
+    // limpiar bandera de confirmación y payload
+    st.stickerConfirmCreate = false;
+    delete st.stickerConfirmPayload;
+    estadoUsuarios.set(telClienteNorm, st);
+
+    // =========================
+    // CREACIÓN DEL PEDIDO (ahora sí)
+    // =========================
+    const origenDireccion = cSnap.direccion ?? '';
+    const telOrigen = cSnap.telefono ? normalizar(cSnap.telefono) : '';
+
     const detalles =
       `Pedido creado por *sticker oficial* del comercio:\n` +
-      `🏪 ${comercio?.nombre || '-'}\n` +
-      `📞 ${comercio?.telefono || '-'}\n` +
-      `📌 ${comercio?.direccion || '-'}`;
+      `🏪 ${cSnap.nombre ?? '-'}\n` +
+      `📞 ${cSnap.telefono ?? '-'}\n` +
+      `📌 ${cSnap.direccion ?? '-'}`;
 
-    const origenDireccion = comercio?.direccion ?? '';
-    const telOrigen = comercio?.telefono ?? '';
-
-    // 1) Crear SIEMPRE el pedido en PENDIENTE (0) (NO setear domi aquí)
     const pedidoCreado = await this.domiciliosService.create({
       mensaje_confirmacion: 'Auto-ingreso (sticker oficial comercio)',
-      estado: 0, // pendiente
+      estado: 0,
       numero_cliente: telClienteNorm,
       fecha: new Date().toISOString(),
       hora: new Date().toTimeString().slice(0, 5),
@@ -3403,28 +3762,13 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       foto_entrega_url: '',
     });
 
-    // 2) Intentar asignar un domi disponible
+    // 2) Intentar asignar domi
     let domiciliario: Domiciliario | null = null;
-    try {
-      domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible();
-    } catch {
-      domiciliario = null;
-    }
+    try { domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible(); }
+    catch { domiciliario = null; }
 
-    // 2.a) Si NO hay domi → queda pendiente, avisa al cliente y menú cancelar
+    // 2.a) Sin domi → pendiente, avisos
     if (!domiciliario) {
-      // await this.enviarMensajeTexto(telClienteNorm, '🚨');
-      // await this.enviarMensajeTexto(
-      //   telClienteNorm,
-      //   [
-      //     'Con mucho gusto estamos procesando tu domicilio ✨🛵',
-      //     '',
-      //     'En breve te avisaremos cuando asignemos el domiciliario ✅',
-      //     '',
-      //     '🙏 Gracias por tu paciencia y confianza.'
-      //   ].join('\n')
-      // );
-
       if (pedidoCreado?.id) {
         await this.mostrarMenuPostConfirmacion(
           telClienteNorm,
@@ -3432,22 +3776,18 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
           '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
         );
       }
-
-      const st = estadoUsuarios.get(telClienteNorm) || {};
-      st.esperandoAsignacion = true;
-      estadoUsuarios.set(telClienteNorm, st);
+      const st2 = estadoUsuarios.get(telClienteNorm) || {};
+      st2.esperandoAsignacion = true;
+      estadoUsuarios.set(telClienteNorm, st2);
       return;
     }
 
-    // 3) Pasar a OFERTADO (5) **solo si sigue PENDIENTE** (operación ATÓMICA)
-    const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
-      pedidoCreado.id,
-      domiciliario.id
-    );
+    // 3) OFERTADO (5) si sigue pendiente (ATÓMICO)
+    const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(pedidoCreado.id, domiciliario.id);
 
     if (!ofertado) {
-      // Perdimos carrera; libera domi y deja pendiente con aviso al cliente
-      try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
+      // Carrera perdida → conservar turno y volver disponible (uniforme con timeout)
+      try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch { }
       await this.enviarMensajeTexto(
         telClienteNorm,
         '⏳ Estamos gestionando tu pedido. Te avisaremos apenas asignemos un domiciliario.'
@@ -3461,11 +3801,8 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       return;
     }
 
-    // 4) Avisar al cliente que estamos ofertando y dar opción de cancelar
-    await this.enviarMensajeTexto(
-      telClienteNorm,
-      '⏳ Estamos *procesando* tu pedido. Gracias por preferirnos'
-    );
+    // 4) Aviso al cliente y menú cancelar
+    await this.enviarMensajeTexto(telClienteNorm, '⏳ Estamos *procesando* tu pedido. Gracias por preferirnos');
     await this.mostrarMenuPostConfirmacion(
       telClienteNorm,
       pedidoCreado.id,
@@ -3473,20 +3810,18 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       60 * 1000
     );
 
-    // 5) Armar resumen para el domi (sin datos sensibles)
+    // 5) Resumen para el domi (omite líneas vacías)
     const resumenParaDomi = this.sanitizeWaBody(
       [
         '📦 *Nuevo pedido disponible*',
         '',
-        comercio?.nombre ? `🏪 *Comercio:* ${comercio.nombre}` : '',
+        cSnap.nombre ? `🏪 *Comercio:* ${cSnap.nombre}` : '',
         origenDireccion ? `📍 *Recoger en:* ${origenDireccion}` : '',
         telOrigen ? `📞 *Tel:* ${telOrigen}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n')
+      ].filter(Boolean).join('\n')
     );
 
-    // 6) Enviar oferta (texto + botones ACEPTAR/RECHAZAR)
+    // 6) Enviar oferta (botones ACEPTAR/RECHAZAR)
     await this.enviarOfertaAceptarRechazarConId({
       telefonoDomi: domiciliario.telefono_whatsapp,
       pedidoId: pedidoCreado.id,
@@ -3494,55 +3829,36 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       bodyCorto: '¿Deseas tomar este pedido?',
     });
 
-    // 7) Registrar oferta vigente en memoria (2 minutos)
-    const OFERTA_TIMEOUT_MS = 90_000;
-    const domKey = toTelKey(domiciliario.telefono_whatsapp);
-    ofertasVigentes.set(pedidoCreado.id, {
-      expira: Date.now() + OFERTA_TIMEOUT_MS,
-      domi: domKey,
-    });
+    // 7) Registrar oferta vigente (timeout)
+    const OFERTA_TIMEOUT_MS = 120_000; // 2 min
+    const domKey = toTelKeyLocal(domiciliario.telefono_whatsapp);
+    ofertasVigentes.set(pedidoCreado.id, { expira: Date.now() + OFERTA_TIMEOUT_MS, domi: domKey });
 
-    // Limpia timeout previo si existía
     const prev = temporizadoresOferta.get(pedidoCreado.id);
     if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedidoCreado.id); }
 
-    // 8) Programar timeout: si el domi NO responde, revertir a PENDIENTE, liberar y enviar botones de estado
-    const domiId = domiciliario.id; // captura segura
+    // 8) Timeout si el domi NO responde → volver a pendiente y mantener turno/disponibilidad (sin botones)
+    const domiId = domiciliario.id;
     const to = setTimeout(async () => {
       try {
         const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedidoCreado.id); // 5→0 atómico
         if (volvio) {
-          try { await this.domiciliarioService.liberarDomiciliario(domiId); } catch { }
+          try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiId, true); } catch { }
           ofertasVigentes.delete(pedidoCreado.id);
           temporizadoresOferta.delete(pedidoCreado.id);
 
           this.logger.warn(`⏰ Domi no respondió. Pedido ${pedidoCreado.id} vuelve a pendiente.`);
-          await this.enviarMensajeTexto(domKey, '⏱️ Te demoraste en responder. El pedido ya no está disponible. Cambia tu estado');
-
-          // Botones de estado al domi (inmediato)
+          // Aviso simple (sin botones)
           try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: domKey,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
+            await this.enviarMensajeTexto(
+              domKey,
+              '⏱️ La oferta expiró.\n YA NO ACEPTES, NI RECHAZES\n\n Quedaste disponible y mantuviste tu turno ✅'
+            );
           } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones de estado tras timeout: ${e instanceof Error ? e.message : e}`);
+            this.logger.warn(`⚠️ No se pudo notificar al domiciliario tras timeout: ${e instanceof Error ? e.message : e}`);
           }
-
-          // ❌ No forzar el cron aquí para evitar reentrancia
         } else {
-          // Ya no estaba en 5 (lo aceptaron/rechazaron antes) → limpiar memoria por si acaso
+          // Ya no estaba en 5 (aceptado/rechazado antes)
           ofertasVigentes.delete(pedidoCreado.id);
           temporizadoresOferta.delete(pedidoCreado.id);
         }
@@ -3557,10 +3873,8 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
     temporizadoresOferta.set(pedidoCreado.id, to);
 
-    // ❌ IMPORTANTE: NO crear conversación aquí. Se crea SOLO cuando el domi acepta.
+    // ❌ NO crear conversación aquí. Se crea SOLO cuando el domi acepta.
   }
-
-
 
 
 
@@ -3600,7 +3914,7 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
         type: 'interactive',
         interactive: {
           type: 'button',
-          body: { text: '¿Deseas finalizar el pedido?' },
+          body: { text: '*DOMICILIO ASIGNADO!*, Deseas finalizar el pedido?' },
           action: {
             buttons: [
               { type: 'reply', reply: { id: 'fin_domi', title: '✅ Finalizar' } },
@@ -3639,128 +3953,177 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
 
 
-  private async finalizarConversacionPorDomi(conversacionId: number, monto?: number) {
-    const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
-    if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
-    if (conv.estado === 'finalizada') return { ok: true }; // idempotente
+private async finalizarConversacionPorDomi(conversacionId: number, monto?: number) {
+  const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
+  if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
+  if (conv.estado === 'finalizada') return { ok: true }; // idempotente
 
-    const cliente = conv.numero_cliente;
-    const domi = conv.numero_domiciliario;
+  const cliente = conv.numero_cliente;
+  const domi = conv.numero_domiciliario;
 
-    // Helpers locales
-    const norm = (n?: string) => (String(n || '').replace(/\D/g, ''));
-    const variants = (n?: string) => {
-      const d = norm(n);
-      const ten = d.slice(-10);
-      const v = new Set<string>();
-      if (!ten) return v;
-      v.add(ten);
-      v.add(`57${ten}`);
-      v.add(`+57${ten}`);
-      v.add(d);
-      return v;
-    };
+  // Helpers locales
+  const norm = (n?: string) => (String(n || '').replace(/\D/g, ''));
+  const variants = (n?: string) => {
+    const d = norm(n);
+    const ten = d.slice(-10);
+    const v = new Set<string>();
+    if (!ten) return v;
+    v.add(ten);         // 10 dígitos
+    v.add(`57${ten}`);  // 57 + 10
+    v.add(`+57${ten}`); // +57 + 10
+    v.add(d);           // tal cual llegó
+    return v;
+  };
 
-    const clearAllFor = (num?: string) => {
-      for (const v of variants(num)) {
-        // estado en memoria
-        const st = estadoUsuarios.get(v);
-        if (st) {
-          delete st.conversacionId;
-          delete st.flujoActivo;
-          delete st.awaitingEstado;
-          delete st.awaitingEstadoExpiresAt;
-          delete st.soporteActivo;
-          delete st.soporteConversacionId;
-          delete st.soporteAsesor;
-          delete st.soporteCliente;
-          delete st.pedidoId;
-          estadoUsuarios.delete(v);
-        }
-        // timers
-        if (temporizadoresInactividad.has(v)) {
-          clearTimeout(temporizadoresInactividad.get(v)!);
-          temporizadoresInactividad.delete(v);
-        }
-        if (temporizadoresEstado.has(v)) {
-          clearTimeout(temporizadoresEstado.get(v)!);
-          temporizadoresEstado.delete(v);
-        }
-        if (bloqueoMenu.has(v)) {
-          clearTimeout(bloqueoMenu.get(v)!);
-          bloqueoMenu.delete(v);
-        }
+  const clearAllFor = (num?: string) => {
+    for (const v of variants(num)) {
+      // estado en memoria
+      const st = estadoUsuarios.get(v);
+      if (st) {
+        delete st.conversacionId;
+        delete st.flujoActivo;
+        delete st.awaitingEstado;
+        delete st.awaitingEstadoExpiresAt;
+        delete st.soporteActivo;
+        delete st.soporteConversacionId;
+        delete st.soporteAsesor;
+        delete st.soporteCliente;
+        delete st.pedidoId;
+        estadoUsuarios.delete(v);
       }
-    };
+      // timers
+      if (temporizadoresInactividad.has(v)) {
+        clearTimeout(temporizadoresInactividad.get(v)!);
+        temporizadoresInactividad.delete(v);
+      }
+      if (temporizadoresEstado.has(v)) {
+        clearTimeout(temporizadoresEstado.get(v)!);
+        temporizadoresEstado.delete(v);
+      }
+      if (bloqueoMenu.has(v)) {
+        clearTimeout(bloqueoMenu.get(v)!);
+        bloqueoMenu.delete(v);
+      }
+    }
+  };
 
-    // Mensajes (no bloquean el cierre si fallan)
-    try {
-      await this.enviarMensajeTexto(
-        domi,
-        `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+  // Mensajes (no bloquean el cierre si fallan)
+  try {
+    await this.enviarMensajeTexto(
+      domi,
+      `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
 Gracias por tu entrega y compromiso 👏
 
 👉 *Ahora elige tu estado:*`
-      );
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: domi,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'Cambia tu disponibilidad:' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
+    );
+    await axiosWhatsapp.post('/messages', {
+      messaging_product: 'whatsapp',
+      to: domi,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: 'Cambia tu disponibilidad:' },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+            { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+          ],
         },
-      });
-    } catch (e: any) {
-      this.logger.warn(`⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e}`);
-    }
-
-    try {
-      // 👇 línea opcional con el valor si viene definido
-      const montoLinea =
-        (typeof monto === 'number' && Number.isFinite(monto))
-          ? `\n💵 *Valor del domicilio:* ${Math.round(monto).toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })}`
-          : '';
-
-      const mensajeCliente = [
-        '✅ Gracias por confiar en nuestro servicio',
-        'TU PEDIDO HA SIDO FINALIZADO CON ÉXITO.',
-        montoLinea, // 👈 se agrega aquí
-        '',
-        '📲 Para mayor seguridad y transparencia escríbenos siempre al',
-        '313 408 9563',
-        'domiciliosw.com',
-        '',
-        '',
-        '📞 Quejas, reclamos y afiliaciones: 314 242 3130 – Wilber Álvarez'
-      ].join('\n');
-
-      await this.enviarMensajeTexto(cliente, mensajeCliente);
-    } catch (e: any) {
-      this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
-    }
-    // Persistencia: cerrar conversación SIEMPRE
-    conv.estado = 'finalizada';
-    conv.fecha_fin = new Date();
-    try {
-      await this.conversacionRepo.save(conv);
-    } catch (e: any) {
-      this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
-      // seguimos con limpieza en memoria igualmente
-    }
-
-    // Limpieza en memoria/timers (todas las variantes de número)
-    clearAllFor(cliente);
-    clearAllFor(domi);
-
-    return { ok: true };
+      },
+    });
+  } catch (e: any) {
+    this.logger.warn(`⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e}`);
   }
+
+  try {
+    // 👇 línea opcional con el valor si viene definido
+    const montoLinea =
+      (typeof monto === 'number' && Number.isFinite(monto))
+        ? `\n💵 *Valor del domicilio:* ${Math.round(monto).toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })}`
+        : '';
+
+    const mensajeCliente = [
+      '✅ Gracias por confiar en nuestro servicio',
+      'TU PEDIDO HA SIDO FINALIZADO CON ÉXITO.',
+      montoLinea, // 👈 se agrega aquí si aplica
+      '',
+      '📲 Para mayor seguridad y transparencia escríbenos siempre al',
+      '313 408 9563',
+      'domiciliosw.com',
+      '',
+      '',
+      '📞 Quejas, reclamos y afiliaciones: 314 242 3130 – Wilber Álvarez'
+    ].join('\n');
+
+    await this.enviarMensajeTexto(cliente, mensajeCliente);
+  } catch (e: any) {
+    this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
+  }
+
+  // ✅ NUEVO: cerrar el pedido como ENTREGADO (7) y dejar al domi disponible manteniendo turno
+  try {
+    // 1) Intentar tomar pedidoId desde estado en memoria
+    const pickPedidoId = (num?: string): number | undefined => {
+      for (const v of variants(num)) {
+        const st = estadoUsuarios.get(v);
+        if (st?.pedidoId) return Number(st.pedidoId);
+      }
+      return undefined;
+    };
+
+    let pedidoId = pickPedidoId(cliente) ?? pickPedidoId(domi);
+
+    // 2) Fallback: buscar el último pedido ASIGNADO (1) del cliente (probando variantes)
+    if (!pedidoId) {
+      for (const variante of variants(cliente)) {
+        const lista = await this.domiciliosService.find({
+          where: { numero_cliente: variante, estado: 1 }, // 1 = ASIGNADO
+          order: { fecha_creacion: 'DESC' },
+          take: 1,
+        });
+        if (lista?.length) { pedidoId = lista[0].id; break; }
+      }
+    }
+
+    if (pedidoId) {
+      // Obtener domiId por teléfono (si existe)
+      let domiId: number | undefined = undefined;
+      try {
+        const domiEntity = await this.domiciliarioService.getByTelefono(domi);
+        domiId = domiEntity?.id;
+      } catch {}
+
+      // 3) Marcar ENTREGADO (7) de forma atómica (requiere método en DomiciliosService)
+      const okEntregado = await this.domiciliosService.marcarEntregadoSiAsignado(pedidoId, domiId);
+
+      // 4) Dejar al domiciliario disponible sin mover su turno
+      if (okEntregado && domiId) {
+        await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiId, true).catch(() => {});
+      }
+    } else {
+      this.logger.warn(`⚠️ No pude inferir pedidoId a cerrar para conv=${conversacionId} (cliente=${cliente}).`);
+    }
+  } catch (e: any) {
+    this.logger.error(`❌ Falló el cierre (estado=7) para conv=${conversacionId}: ${e?.message || e}`);
+  }
+
+  // Persistencia: cerrar conversación SIEMPRE
+  conv.estado = 'finalizada';
+  conv.fecha_fin = new Date();
+  try {
+    await this.conversacionRepo.save(conv);
+  } catch (e: any) {
+    this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
+    // seguimos con limpieza en memoria igualmente
+  }
+
+  // Limpieza en memoria/timers (todas las variantes de número)
+  clearAllFor(cliente);
+  clearAllFor(domi);
+
+  return { ok: true };
+}
+
 
 
 
@@ -4023,5 +4386,83 @@ Gracias por tu entrega y compromiso 👏
     return d;
   }
 
+
+  // ---------------------------------------------------------
+  // Helpers de normalización y coalesce
+  // ---------------------------------------------------------
+  private toTelKeyLocal(n: string) {
+    // Usa tu toKey/toTelKey si ya existe
+    if ((this as any).toTelKey) return (this as any).toTelKey(n);
+    const d = (n || '').replace(/\D/g, '');
+    return d.length === 10 ? `57${d}` : d; // 57 + 10 dígitos
+  }
+
+  private firstNonEmpty(...vals: Array<string | null | undefined>): string | null {
+    for (const v of vals) {
+      if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------
+  // Carga/resuelve un snapshot del comercio sin placeholders
+  // Devuelve { id?, nombre|null, telefono|null, direccion|null }
+  // e intenta completar campos faltantes desde BD
+  // ---------------------------------------------------------
+  private async resolveComercioSnapshot(input: any, numeroWhatsApp: string): Promise<{
+    id?: number;
+    nombre: string | null;
+    telefono: string | null;
+    direccion: string | null;
+  }> {
+    // 1) Arranca con lo que venga en "input"
+    const init = input ?? {};
+    let id: number | undefined = init?.id;
+    let nombre = this.firstNonEmpty(init?.nombre, init?.name, init?.razon_social);
+    let telefono = this.firstNonEmpty(init?.telefono, init?.telefono_whatsapp, init?.celular, init?.tel, init?.phone);
+    let direccion = this.firstNonEmpty(init?.direccion, init?.direccion_principal, init?.address);
+
+    // Normaliza teléfono si existe
+    if (telefono) telefono = this.toTelKeyLocal(telefono);
+
+    // 2) Si faltan campos y hay id, intenta recargar por id
+    if (id && (!nombre || !telefono || !direccion)) {
+      try {
+        const rec = (await (this.comerciosService as any)?.getById?.(id))
+          ?? (await (this.comerciosService as any)?.findOne?.(id));
+        if (rec) {
+          nombre = nombre ?? this.firstNonEmpty(rec?.nombre, rec?.name, rec?.razon_social);
+          telefono = telefono ?? this.firstNonEmpty(rec?.telefono, rec?.telefono_whatsapp, rec?.celular, rec?.tel, rec?.phone);
+          direccion = direccion ?? this.firstNonEmpty(rec?.direccion, rec?.direccion_principal, rec?.address);
+          if (telefono) telefono = this.toTelKeyLocal(telefono);
+        }
+      } catch { /* no-op */ }
+    }
+
+    // 3) Si siguen faltando datos, intenta por el número que envió el sticker
+    //    (suele ser el WA del comercio)
+    if (!nombre || !telefono || !direccion) {
+      try {
+        const telKeySticker = this.toTelKeyLocal(numeroWhatsApp);
+        const recByTel =
+          (await (this.comerciosService as any)?.getByTelefono?.(telKeySticker))
+          ?? (await (this.comerciosService as any)?.findByTelefono?.(telKeySticker))
+          ?? (await (this.comerciosService as any)?.getByWhatsapp?.(telKeySticker));
+        if (recByTel) {
+          id = id ?? recByTel.id;
+          nombre = nombre ?? this.firstNonEmpty(recByTel?.nombre, recByTel?.name, recByTel?.razon_social);
+          telefono = telefono ?? this.firstNonEmpty(recByTel?.telefono, recByTel?.telefono_whatsapp, recByTel?.celular, recByTel?.tel, recByTel?.phone);
+          direccion = direccion ?? this.firstNonEmpty(recByTel?.direccion, recByTel?.direccion_principal, recByTel?.address);
+          if (telefono) telefono = this.toTelKeyLocal(telefono);
+        }
+      } catch { /* no-op */ }
+    }
+
+    // 4) Devuelve snapshot SIN guiones; el render decide si muestra '-' u omite línea
+    return { id, nombre: nombre ?? null, telefono: telefono ?? null, direccion: direccion ?? null };
+  }
+
+
+  
 }
 
