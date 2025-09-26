@@ -173,203 +173,229 @@ export class ChatbotService {
 
 
 
-  @Interval(20000) // cada 20,000 ms = 20 s
-  async reintentarAsignacionPendientes(): Promise<void> {
+@Interval(45000) // cada 60,000 ms = 60 s
+async reintentarAsignacionPendientes(): Promise<void> {
+  // --- helpers locales muy simples ---
+  const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+  const PAUSA_BASE_MS = 500;   // pausa mínima entre pedidos
+  const JITTER_MS     = 300;   // aleatorio para no “sincronizar” envíos
+  const pausaSuave = async () => {
+    const jitter = Math.floor(Math.random() * JITTER_MS);
+    await sleep(PAUSA_BASE_MS + jitter);
+  };
+  const MAX_POR_CORRIDA = 15;  // opcional: tope por corrida (ajústalo o ponlo en Infinity)
 
-    const now = Date.now();
-    if ((now - LAST_RETRY_AT) < MIN_GAP_MS) {
-      this.logger.debug('⛳ Cooldown activo; se omite este cron.');
-      return;
-    }
-
-    if (this.isRetryRunning) {
-      this.logger.log('⏳ Reintento ya en ejecución; se omite esta corrida.');
-      return;
-    }
-    this.isRetryRunning = true;
-
-    const MAX_WAIT_MS = 20 * 60 * 1000;
-
-
-    try {
-      const pendientes = await this.domiciliosService.find({
-        where: { estado: 0 },        // pendientes
-        order: { fecha: 'ASC' },
-        take: 25,
-      });
-
-      if (!pendientes?.length) {
-        this.logger.log('✅ No hay pedidos pendientes para reintentar.');
-        return;
-      }
-
-      this.logger.log(`🔁 Reintentando asignación para ${pendientes.length} pedido(s) pendiente(s).`);
-
-      for (const pedido of pendientes) {
-        try {
-          // 1) Cancelar por timeout si sigue PENDIENTE
-          const creadaMs = new Date(pedido.fecha).getTime();
-          const diff = Date.now() - creadaMs;
-
-          if (Number.isFinite(creadaMs) && diff >= MAX_WAIT_MS) {
-            const cancelado = await this.domiciliosService.cancelarPorTimeoutSiPendiente(
-              pedido.id,
-              'Tiempo de espera de asignación superado (10m)',
-            );
-            if (cancelado) {
-              await this.enviarMensajeTexto(
-                pedido.numero_cliente,
-                [
-                  '🚨 ¡Ups! *SIN DOMICILIARIOS DISPONIBLES*',
-                  '⛔ Tu solicitud fue cancelada.',
-                  '',
-                  '👉 Vuelve a pedir tu servicio o contacta a nuestros aliados:',
-                  '',
-                  '📞 *314 440 3062* – Veloz',
-                  '📞 *313 705 7041* – Rápigo',
-                  '📞 *314 242 3130* – EnviosW',
-                  '',
-                  '🌐 domiciliosw.com!',
-                  '⭐ *Tu mejor opción*'
-                ].join('\n')
-              );
-              const st = estadoUsuarios.get(pedido.numero_cliente) || {};
-              st.esperandoAsignacion = false;
-              estadoUsuarios.set(pedido.numero_cliente, st);
-              this.logger.warn(`❌ Pedido id=${pedido.id} cancelado por timeout de asignación (>10m).`);
-            }
-            continue;
-          }
-
-          // 2) Intentar asignar un domi
-          const domiciliario: Domiciliario | null =
-            await this.domiciliarioService.asignarDomiciliarioDisponible();
-
-          if (!domiciliario) {
-            this.logger.warn(`⚠️ Sin domiciliarios para pedido id=${pedido.id}. Se mantiene pendiente.`);
-            // Ofrece cancelar sin spamear (usa tu botón)
-            await this.mostrarMenuPostConfirmacion(
-              pedido.numero_cliente,
-              pedido.id,
-              '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.',
-              5 * 60 * 1000
-            );
-            continue;
-          }
-
-          // 3) MARCAR OFERTADO **ATOMICO** (evita 2 domis a la vez)
-          const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
-            pedido.id,
-            domiciliario.id
-          );
-          if (!ofertado) {
-            // Otro proceso lo tomó / cambió estado → liberar domi y seguir
-            try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
-            this.logger.warn(`⛔ Race detectada: pedido ${pedido.id} ya no está pendiente.`);
-            continue;
-          }
-
-          // 4) Armar resumen para el domi (sin lista si es sticker)
-          const tipo = String(pedido?.tipo_servicio || '').trim();
-          const esSticker = tipo.toLowerCase() === 'sticker';
-
-          const tipoLinea = tipo ? `🔁 *Tipo de servicio:* ${tipo}` : '';
-          const recoger = pedido.origen_direccion
-            ? `📍 *Recoger en:* ${pedido.origen_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_origen || '-'}`
-            : '';
-          const entregar = pedido.destino_direccion
-            ? `🏠 *Entregar en:* ${pedido.destino_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_destino || '-'}`
-            : '';
-
-          const lista = (() => {
-            if (!pedido.detalles_pedido) return '';
-            if (esSticker) {
-              // Extrae nombre del comercio de los detalles (línea con "🏪")
-              const match = pedido.detalles_pedido.match(/🏪\s*(.+)/);
-              const comercio = match ? match[1].trim() : null;
-              return comercio ? `🏪 *Comercio:* ${comercio}` : '';
-            }
-            return `🛒 *Lista de compras:*\n${String(pedido.detalles_pedido).trim()}`;
-          })();
-
-          const resumenPedido = [tipoLinea, recoger, entregar, lista]
-            .filter(Boolean)
-            .join('\n\n');
-
-          const bodyTexto = this.sanitizeWaBody(
-            `📦 *Nuevo pedido disponible:*\n\n${resumenPedido}`
-          );
-
-          // 5) Enviar resumen + botones (IDs: ACEPTAR_<id> / RECHAZAR_<id>)
-          await this.enviarOfertaAceptarRechazarConId({
-            telefonoDomi: domiciliario.telefono_whatsapp,
-            pedidoId: pedido.id,
-            resumenLargo: bodyTexto,
-            bodyCorto: '¿Deseas tomar este pedido?',
-          });
-
-          // ofertasVigentes.set(pedido.id, { domi: domiciliario.telefono_whatsapp, expira: Date.now() + 120_000 });
-          ofertasVigentes.set(pedido.id, {
-            expira: Date.now() + OFERTA_TIMEOUT_MS,              // <-- MS, NO segundos
-            domi: this.toTelKey(domiciliario.telefono_whatsapp), // <-- normalizado
-          });
-
-
-
-          // 🧹 Limpia timeout previo de oferta para este pedido (si existía)
-          const prev = temporizadoresOferta.get(pedido.id);
-          if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedido.id); }
-
-          // 6) Timeout: si el domi NO responde, vuelve a pendiente de forma ATÓMICA
-          const to = setTimeout(async () => {
-            try {
-              const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedido.id); // 5 -> 0
-              if (volvio) {
-                // Avisar al domiciliario que la oferta expiró
-                try {
-                  const domi = await this.domiciliarioService.getById(domiciliario.id);
-                  const tel = domi?.telefono_whatsapp;
-                  if (tel) {
-                    await this.enviarMensajeTexto(
-                      tel,
-                      '⏱️ La oferta expiró y fue asignada a otro domiciliario. Por favor no la aceptes ya.'
-                    );
-                  }
-                } catch (e) {
-                  this.logger.warn(`No pude notificar al domi ${domiciliario.id}: ${e instanceof Error ? e.message : e}`);
-                }
-
-                // (defensivo) liberar domi atado a la oferta
-                // ✅ marcar disponible SIN mover turno
-                try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch { }
-
-                this.logger.warn(`⏰ Domi no respondió. Pedido ${pedido.id} vuelve a pendiente.`);
-                ofertasVigentes.delete(pedido.id);
-              }
-              // Si no "volvió", es porque ya NO está en OFERTADO (ej: fue ASIGNADO o CANCELADO)
-            } catch (e: any) {
-              this.logger.error(`Timeout oferta falló para pedido ${pedido.id}: ${e?.message || e}`);
-            } finally {
-              // ✅ Siempre limpia el handle del timeout
-              temporizadoresOferta.delete(pedido.id);
-            }
-          }, 120_000);
-
-
-          // 🗂️ Registra el timeout para poder cancelarlo si el domi acepta o rechaza antes
-          temporizadoresOferta.set(pedido.id, to);
-
-
-        } catch (err) {
-          this.logger.error(`❌ Error reintentando pedido id=${pedido.id}: ${err?.message || err}`);
-        }
-      }
-    } catch (err) {
-      this.logger.error(`❌ Error global en reintentos: ${err?.message || err}`);
-    } finally {
-      this.isRetryRunning = false;
-    }
+  const now = Date.now();
+  if ((now - LAST_RETRY_AT) < MIN_GAP_MS) {
+    this.logger.debug('⛳ Cooldown activo; se omite este cron.');
+    return;
   }
+
+  if (this.isRetryRunning) {
+    this.logger.log('⏳ Reintento ya en ejecución; se omite esta corrida.');
+    return;
+  }
+  this.isRetryRunning = true;
+
+  const MAX_WAIT_MS = 20 * 60 * 1000;
+
+  try {
+    const pendientes = await this.domiciliosService.find({
+      where: { estado: 0 },        // pendientes
+      order: { fecha: 'ASC' },
+      take: 25,
+    });
+
+    if (!pendientes?.length) {
+      this.logger.log('✅ No hay pedidos pendientes para reintentar.');
+      return;
+    }
+
+    this.logger.log(`🔁 Reintentando asignación para ${pendientes.length} pedido(s) pendiente(s).`);
+
+    let procesados = 0;
+
+    for (const pedido of pendientes) {
+      if (procesados >= MAX_POR_CORRIDA) {
+        this.logger.log(`⏸️ Límite por corrida alcanzado (${MAX_POR_CORRIDA}). Se continúa en el próximo tick.`);
+        break;
+      }
+
+      try {
+        // 1) Cancelar por timeout si sigue PENDIENTE
+        const creadaMs = new Date(pedido.fecha).getTime();
+        const diff = Date.now() - creadaMs;
+
+        if (Number.isFinite(creadaMs) && diff >= MAX_WAIT_MS) {
+          const cancelado = await this.domiciliosService.cancelarPorTimeoutSiPendiente(
+            pedido.id,
+            'Tiempo de espera de asignación superado (10m)',
+          );
+          if (cancelado) {
+            await this.enviarMensajeTexto(
+              pedido.numero_cliente,
+              [
+                '🚨 ¡Ups! *SIN DOMICILIARIOS DISPONIBLES*',
+                '⛔ Tu solicitud fue cancelada.',
+                '',
+                '👉 Vuelve a pedir tu servicio o contacta a nuestros aliados:',
+                '',
+                '📞 *314 440 3062* – Veloz',
+                '📞 *313 705 7041* – Rápigo',
+                '📞 *314 242 3130* – EnviosW',
+                '',
+                '🌐 domiciliosw.com!',
+                '⭐ *Tu mejor opción*'
+              ].join('\n')
+            );
+            const st = estadoUsuarios.get(pedido.numero_cliente) || {};
+            st.esperandoAsignacion = false;
+            estadoUsuarios.set(pedido.numero_cliente, st);
+            this.logger.warn(`❌ Pedido id=${pedido.id} cancelado por timeout de asignación (>10m).`);
+          }
+
+          // ❗ pausamos igual antes de pasar al siguiente, para no “correr” el loop
+          await pausaSuave();
+          procesados++;
+          continue;
+        }
+
+        // 2) Intentar asignar un domi
+        const domiciliario: Domiciliario | null =
+          await this.domiciliarioService.asignarDomiciliarioDisponible();
+
+        if (!domiciliario) {
+          this.logger.warn(`⚠️ Sin domiciliarios para pedido id=${pedido.id}. Se mantiene pendiente.`);
+          // Ofrece cancelar sin spamear (usa tu botón)
+          await this.mostrarMenuPostConfirmacion(
+            pedido.numero_cliente,
+            pedido.id,
+            '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.',
+            5 * 60 * 1000
+          );
+
+          await pausaSuave();
+          procesados++;
+          continue;
+        }
+
+        // 3) MARCAR OFERTADO **ATOMICO** (evita 2 domis a la vez)
+        const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
+          pedido.id,
+          domiciliario.id
+        );
+        if (!ofertado) {
+          // Otro proceso lo tomó / cambió estado → liberar domi y seguir
+          try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch {}
+          this.logger.warn(`⛔ Race detectada: pedido ${pedido.id} ya no está pendiente.`);
+
+          await pausaSuave();
+          procesados++;
+          continue;
+        }
+
+        // 4) Armar resumen para el domi (sin lista si es sticker)
+        const tipo = String(pedido?.tipo_servicio || '').trim();
+        const esSticker = tipo.toLowerCase() === 'sticker';
+
+        const tipoLinea = tipo ? `🔁 *Tipo de servicio:* ${tipo}` : '';
+        const recoger = pedido.origen_direccion
+          ? `📍 *Recoger en:* ${pedido.origen_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_origen || '-'}`
+          : '';
+        const entregar = pedido.destino_direccion
+          ? `🏠 *Entregar en:* ${pedido.destino_direccion}\n📞 *Tel:* ${pedido.telefono_contacto_destino || '-'}`
+          : '';
+
+        const lista = (() => {
+          if (!pedido.detalles_pedido) return '';
+          if (esSticker) {
+            // Extrae nombre del comercio de los detalles (línea con "🏪")
+            const match = pedido.detalles_pedido.match(/🏪\s*(.+)/);
+            const comercio = match ? match[1].trim() : null;
+            return comercio ? `🏪 *Comercio:* ${comercio}` : '';
+          }
+          return `🛒 *Lista de compras:*\n${String(pedido.detalles_pedido).trim()}`;
+        })();
+
+        const resumenPedido = [tipoLinea, recoger, entregar, lista]
+          .filter(Boolean)
+          .join('\n\n');
+
+        const bodyTexto = this.sanitizeWaBody(
+          `📦 *Nuevo pedido disponible:*\n\n${resumenPedido}`
+        );
+
+        // 5) Pausa suave justo antes de enviar la oferta (rate limit natural)
+        await pausaSuave();
+
+        // 5b) Enviar resumen + botones (IDs: ACEPTAR_<id> / RECHAZAR_<id>)
+        await this.enviarOfertaAceptarRechazarConId({
+          telefonoDomi: domiciliario.telefono_whatsapp,
+          pedidoId: pedido.id,
+          resumenLargo: bodyTexto,
+          bodyCorto: '¿Deseas tomar este pedido?',
+        });
+
+        // Registrar oferta vigente y timeout como ya haces
+        ofertasVigentes.set(pedido.id, {
+          expira: Date.now() + OFERTA_TIMEOUT_MS,              // <-- MS, NO segundos
+          domi: this.toTelKey(domiciliario.telefono_whatsapp), // <-- normalizado
+        });
+
+        // 🧹 Limpia timeout previo (si existía)
+        const prev = temporizadoresOferta.get(pedido.id);
+        if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedido.id); }
+
+        // 6) Timeout: si el domi NO responde, vuelve a pendiente de forma ATÓMICA
+        const to = setTimeout(async () => {
+          try {
+            const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedido.id); // 5 -> 0
+            if (volvio) {
+              // Avisar al domiciliario que la oferta expiró
+              try {
+                const domi = await this.domiciliarioService.getById(domiciliario.id);
+                const tel = domi?.telefono_whatsapp;
+                if (tel) {
+                  await this.enviarMensajeTexto(
+                    tel,
+                    '⏱️ La oferta expiró y fue asignada a otro domiciliario. Por favor no la aceptes ya.'
+                  );
+                }
+              } catch (e) {
+                this.logger.warn(`No pude notificar al domi ${domiciliario.id}: ${e instanceof Error ? e.message : e}`);
+              }
+
+              // liberar domi SIN mover turno
+              try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch {}
+
+              this.logger.warn(`⏰ Domi no respondió. Pedido ${pedido.id} vuelve a pendiente.`);
+              ofertasVigentes.delete(pedido.id);
+            }
+          } catch (e: any) {
+            this.logger.error(`Timeout oferta falló para pedido ${pedido.id}: ${e?.message || e}`);
+          } finally {
+            temporizadoresOferta.delete(pedido.id);
+          }
+        }, 120_000);
+
+        temporizadoresOferta.set(pedido.id, to);
+
+      } catch (err) {
+        this.logger.error(`❌ Error reintentando pedido id=${pedido.id}: ${err?.message || err}`);
+      } finally {
+        // pase lo que pase, antes de ir al siguiente, espera un poco
+        await pausaSuave();
+        procesados++;
+      }
+    }
+  } catch (err) {
+    this.logger.error(`❌ Error global en reintentos: ${err?.message || err}`);
+  } finally {
+    this.isRetryRunning = false;
+    LAST_RETRY_AT = Date.now();
+  }
+}
+
 
 
 
@@ -428,6 +454,8 @@ export class ChatbotService {
     if (tipo === 'text') {
       const textoPlano = (texto || '').trim();
 
+
+
       // CANCELAR con ID opcional: "CANCELAR" o "CANCELAR #1234"
       const mCancelar = textoPlano.match(/^cancelar(?:\s*#?\s*(\d+))?$/i);
       if (mCancelar) {
@@ -455,6 +483,115 @@ export class ChatbotService {
         await this.cancelarPedidoDesdeCliente(numero);
         return;
       }
+
+
+      const norm = textoPlano
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '') // sí -> si
+        .replace(/[^\p{L}\p{N}]+/gu, ' ') // limpia símbolos
+        .trim();
+
+      const numeroKeyLocal = this.toKey ? this.toKey(numero) : (numero || '');
+      const st = estadoUsuarios.get(numeroKeyLocal) || {};
+
+      // Detecta si está en algún flujo de confirmación: sticker o pedido rápido
+      const enPreConfirm = !!st.stickerConfirmPayload && !st.stickerConfirmCreate;
+      const enForceConfirm = !!st.stickerForcePayload && !st.stickerForceCreate;
+      const enConfirmPedidoRapido = !!st.pedidoRapidoPendiente && !st.pedidoRapidoConfirmado;
+
+      if (enPreConfirm || enForceConfirm || enConfirmPedidoRapido) {
+        // Si escribió "sí"
+        if (norm === 'si') {
+          if (enPreConfirm) {
+            st.stickerConfirmCreate = true;
+            estadoUsuarios.set(numeroKeyLocal, st);
+
+            const payload = st.stickerConfirmPayload || {};
+            await this.crearPedidoDesdeSticker(
+              numeroKeyLocal,
+              payload?.comercioSnap,
+              payload?.nombreContacto
+            );
+
+            delete st.stickerConfirmPayload;
+            estadoUsuarios.set(numeroKeyLocal, st);
+            return;
+          }
+
+          if (enForceConfirm) {
+            st.stickerForceCreate = true;
+            estadoUsuarios.set(numeroKeyLocal, st);
+
+            const payload = st.stickerForcePayload || {};
+            await this.crearPedidoDesdeSticker(
+              numeroKeyLocal,
+              payload?.comercioSnap,
+              payload?.nombreContacto
+            );
+
+            st.stickerForceCreate = false;
+            delete st.stickerForcePayload;
+            estadoUsuarios.set(numeroKeyLocal, st);
+            return;
+          }
+
+          if (enConfirmPedidoRapido) {
+            st.pedidoRapidoConfirmado = true;
+            const comercio = st.pedidoRapidoPendiente?.comercioSnap;
+            const nombre = st.pedidoRapidoPendiente?.nombreContacto;
+            delete st.pedidoRapidoPendiente;
+            estadoUsuarios.set(numeroKeyLocal, st);
+
+            await this.crearPedidoDesdeSticker(numeroKeyLocal, comercio, nombre);
+            return;
+          }
+        }
+
+        // Si escribió "no"
+        if (norm === 'no') {
+          if (enPreConfirm) {
+            delete st.stickerConfirmCreate;
+            delete st.stickerConfirmPayload;
+            estadoUsuarios.set(numeroKeyLocal, st);
+await this.enviarMensajeTexto(
+  numeroKeyLocal,
+  '👍 *Operación cancelada.* Cancelaste el domicilio. Puedes escribirme para *comenzar de nuevo*.'
+);
+            return;
+          }
+
+          if (enForceConfirm) {
+            delete st.stickerForceCreate;
+            delete st.stickerForcePayload;
+            estadoUsuarios.set(numeroKeyLocal, st);
+            await this.enviarMensajeTexto(
+              numeroKeyLocal,
+              '👍 Operación cancelada. Si necesitas un domicilio, envía el numero 1 de nuevo cuando quieras.'
+            );
+            return;
+          }
+
+          if (enConfirmPedidoRapido) {
+            delete st.pedidoRapidoPendiente;
+            delete st.pedidoRapidoConfirmado;
+            estadoUsuarios.set(numeroKeyLocal, st);
+            await this.enviarMensajeTexto(numeroKeyLocal,   '👍 *Operación cancelada.* Cancelaste el domicilio. Puedes escribirme para *comenzar de nuevo*.'
+);
+            return;
+          }
+        }
+
+        // Si escribió otra cosa diferente a sí/no
+        if (norm && norm.length < 25) {
+          await this.enviarMensajeTexto(
+            numeroKeyLocal,
+            '❓ Por favor confirma si deseas el domicilio respondiendo:\n✅ *Sí* o ❌ *No*'
+          );
+          return;
+        }
+      }
+
     }
 
     // ── Normaliza a la clave de teléfono (57 + 10 dígitos)
@@ -983,6 +1120,51 @@ export class ChatbotService {
     if (mensaje?.interactive?.type === 'button_reply') {
       const id = mensaje.interactive.button_reply.id;
 
+
+      // ——— CANCELACIÓN INMEDIATA (info|compra|pago) ———
+      // ⚠️ Pon ESTE bloque ANTES de cualquier otro `return` o de tu `isCancelar`
+      if (/^cancelar_(info|compra|pago)$/.test(btnId)) {
+        const numeroKey = (this as any).toKey ? (this as any).toKey(mensaje.from) : mensaje.from;
+
+        // (opcional) cancelar en BD si hay pedido en memoria
+        try {
+          const st = estadoUsuarios.get(numeroKey) || {};
+          if (st?.pedidoId) {
+            const p = await this.getPedidoById(st.pedidoId).catch(() => null);
+            if (p && p.estado !== 2) {
+              if (p.estado === 5 && p.id_domiciliario) {
+                try { await this.domiciliarioService.liberarDomiciliario(p.id_domiciliario); } catch { }
+              }
+              await this.domiciliosService.update(st.pedidoId, {
+                estado: 2,
+                id_domiciliario: null,
+                motivo_cancelacion: 'Cancelado por el cliente (botón de paso)',
+              });
+            }
+          }
+        } catch (e) {
+          this.logger.warn(`cancelar_(info|compra|pago) no pudo cancelar en BD: ${e?.message || e}`);
+        }
+
+        // Apaga timers (si los usas)
+        try { if (temporizadoresEstado?.has(numeroKey)) { clearTimeout(temporizadoresEstado.get(numeroKey)!); temporizadoresEstado.delete(numeroKey); } } catch { }
+        try { if (temporizadoresInactividad?.has?.(numeroKey)) { clearTimeout(temporizadoresInactividad.get(numeroKey)!); temporizadoresInactividad.delete(numeroKey); } } catch { }
+
+        // Limpia estado del flujo
+        try {
+          estadoUsuarios.delete(numeroKey); // o resetea campos si prefieres
+        } catch { }
+
+        await this.enviarMensajeTexto(
+          numeroKey,
+          '📩 Si cancelas el servicio recibirás este mensaje automático:\n👉 Para la próxima pide por 🌐 domiciliosw.com más fácil y rápido ✅'
+        );
+
+        this.logger.debug(`✅ cancelación inmediata por btnId=${btnId} aplicada para ${numeroKey}`);
+        return; // MUY IMPORTANTE: no sigas a otros handlers
+      }
+
+
       // MATCH de los distintos formatos de botón de cancelar
       const isCancelar =
         id === 'cancelar' ||
@@ -1475,7 +1657,8 @@ export class ChatbotService {
         delete st.stickerConfirmPayload;
         estadoUsuarios.set(numeroKey, st);
 
-        await this.enviarMensajeTexto(numeroKey, '👍 Operación cancelada.');
+        await this.enviarMensajeTexto(numeroKey,   '👍 *Operación cancelada.* Cancelaste el domicilio. Puedes escribirme para *comenzar de nuevo*.'
+);
         return;
       }
 
@@ -1675,46 +1858,58 @@ export class ChatbotService {
           return;
         }
 
-        // 5) Guardar y notificar (con nombre)
+        // 5) Guardar y (opcionalmente) notificar
         try {
           // 🔎 Obtener el domiciliario por teléfono
-          // Asegúrate de que telefono_whatsapp en BD tenga el mismo formato que numeroKey
           const domi = await this.domiciliarioService.getByTelefono(numeroKey);
           const nombreDomi = domi?.nombre || 'N/D';
-          const apellidoomi = domi?.apellido || 'N/D';
+          const apellidoDomi = domi?.apellido || 'N/D';
           const numeroChaq = domi?.numero_chaqueta || 'N/D';
 
-          // Guardar en BD (agrega el campo si existe en tu entidad)
+          // Guardar en BD (si falla, sí debemos abortar)
           await this.precioRepo.save({
             numero_domiciliario: numeroKey,
             costo: costoStr,
           });
 
-          // Notificación a tu número fijo
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: this.numeroNotificaciones,
-            type: 'text',
-            text: {
-              body: `📦 Precio confirmado
-👤 Domiciliario: ${nombreDomi} ${apellidoomi ?? ''}
+          // marcamos idempotencia tras guardar, para evitar duplicado de confirmación
+          this.notifsPrecioCache.set(idemKey, now);
+
+          // Intentar notificar, pero que NO bloquee el flujo si falla
+          const debeNotificar = Boolean(this.numeroNotificaciones && String(this.numeroNotificaciones).trim());
+          if (debeNotificar) {
+            try {
+              // timeout corto para que no se quede colgado esperando a WhatsApp
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: this.numeroNotificaciones,
+                type: 'text',
+                text: {
+                  body:
+                    `📦 Precio confirmado
+👤 Domiciliario: ${nombreDomi} ${apellidoDomi ?? ''}
 🅽 Chaqueta: ${numeroChaq ?? ''}
 📱 Número: ${numeroKey}
 💲 Costo: ${costoStr}
 `,
-            },
-          });
-
-          // marcar idempotencia
-          this.notifsPrecioCache.set(idemKey, now);
+                },
+              }, { timeout: 7000 }); // 7s de timeout (ajústalo si quieres)
+            } catch (notifErr) {
+              // Solo registrar; NO abortar el flujo
+              this.logger.warn(`⚠️ No se pudo enviar notificación a número fijo: ${notifErr instanceof Error ? notifErr.message : notifErr}`);
+            }
+          } else {
+            this.logger.warn('ℹ️ No hay numeroNotificaciones configurado. Se omite notificación.');
+          }
 
         } catch (e) {
-          this.logger.error(`❌ Error guardando/notificando precio: ${e instanceof Error ? e.message : e}`);
-          await this.enviarMensajeTexto(numero, '⚠️ No pude guardar o notificar el precio. Intenta confirmar nuevamente.');
+          // Si falló el guardado, sí detenemos (porque no queremos finalizar sin persistir precio)
+          this.logger.error(`❌ Error guardando precio: ${e instanceof Error ? e.message : e}`);
+          await this.enviarMensajeTexto(numero, '⚠️ No pude guardar el precio. Intenta confirmar nuevamente.');
           return;
         }
 
-        // 6) Cerrar flags de estado y finalizar conversación
+        // 6) Cerrar flags de estado y finalizar conversación (siempre llegar aquí, notifique o no)
         s.confirmandoPrecio = false;
         s.capturandoPrecio = false;
         s.conversacionFinalizada = true;
@@ -1725,6 +1920,7 @@ export class ChatbotService {
           await this.enviarMensajeTexto(numero, `❌ No fue posible finalizar: ${msg || 'Error desconocido'}`);
         }
         return;
+
       }
 
 
@@ -2090,7 +2286,6 @@ export class ChatbotService {
       }
 
 
-      // ✏️ Editar información
       if (id === 'editar_info') {
         await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información. Empecemos de nuevo...');
         estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_1' });
@@ -2099,20 +2294,20 @@ export class ChatbotService {
       }
 
       if (id === 'editar_compra') {
-        const tipo = estadoUsuarios.get(numero)?.tipo;
-        if (tipo === 'opcion_2') {
-          await this.enviarMensajeTexto(numero, '🔁 Vamos a actualizar tu lista de compras...');
-          estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_2' });
-          await this.opcion2PasoAPaso(numero, '');
-        } else if (tipo === 'opcion_3') {
-          await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información del pago...');
-          estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_3' });
-          await this.opcion3PasoAPaso(numero, '');
-        } else {
-          await this.enviarMensajeTexto(numero, '❓ No se pudo identificar el tipo de flujo para editar.');
-        }
+        await this.enviarMensajeTexto(numero, '🔁 Vamos a actualizar tu lista de compras...');
+        estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_2' });
+        await this.opcion2PasoAPaso(numero, '');
         return;
       }
+
+      if (id === 'editar_pago') {
+        await this.enviarMensajeTexto(numero, '🔁 Vamos a corregir la información del pago...');
+        estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: 'opcion_3' });
+        await this.opcion3PasoAPaso(numero, '');
+        return;
+      }
+
+
     }
 
 
@@ -2427,6 +2622,8 @@ export class ChatbotService {
             buttons: [
               { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí' } },
               { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
+              { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
+
             ],
           },
         },
@@ -2557,6 +2754,8 @@ export class ChatbotService {
                   buttons: [
                     { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí' } },
                     { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
+                    { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
+
                   ],
                 },
               },
@@ -2745,6 +2944,8 @@ export class ChatbotService {
                 buttons: [
                   { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
                   { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+                  { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
+
                 ],
               },
             },
@@ -2795,6 +2996,8 @@ export class ChatbotService {
               buttons: [
                 { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
                 { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+                { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
+
               ],
             },
           },
@@ -2814,13 +3017,6 @@ export class ChatbotService {
 
 
 
-
-
-  // Versión robusta y tolerante a mensajes “juntos” / reenvíos.
-  // - Usa this.extraerDireccionYTelefono(mensaje) para separar dirección y teléfono.
-  // - Acepta que el usuario reenvíe la info completa estando en paso 2 (actualiza y re-confirma sin duplicar).
-  // - Evita repetir el resumen/botones con estado.confirmacionEnviada.
-  // - Guarda claves de compatibilidad si aplica.
   async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
     const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
 
@@ -2918,8 +3114,11 @@ export class ChatbotService {
           body: { text: '¿Es correcto?' },
           action: {
             buttons: [
-              { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
-              { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+              { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí' } },
+              { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
+              { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
+
+
             ],
           },
         },
@@ -3066,8 +3265,11 @@ export class ChatbotService {
                 body: { text: '¿Es correcto ahora?' },
                 action: {
                   buttons: [
-                    { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
-                    { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+                    { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí' } },
+                    { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
+                    { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
+
+
                   ],
                 },
               },
@@ -3708,7 +3910,9 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
         cSnap.direccion ? `📍 *Recoger en:* ${cSnap.direccion}` : '',
         cSnap.telefono ? `📞 *Tel:* ${cSnap.telefono}` : '',
         '',
-        '¿Deseas *solicitar ahora* un domiciliario?'
+        '¿Deseas *solicitar ahora* un domiciliario? \n',
+  'Si no aparecen los botones, escribe **Si** para *confirmar* o **No** para *cancelar*.'
+
       ].filter(Boolean).join('\n');
 
       st.stickerConfirmPayload = { telClienteNorm, comercioSnap: cSnap, nombreContacto: nombreContacto || null };
@@ -3723,7 +3927,7 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
           body: { text: preview },
           action: {
             buttons: [
-              { type: 'reply', reply: { id: BTN_STICKER_CONFIRM_SI, title: '✅ Solicitar ahora' } },
+              { type: 'reply', reply: { id: BTN_STICKER_CONFIRM_SI, title: '✅ Confirmar' } },
               { type: 'reply', reply: { id: BTN_STICKER_CONFIRM_NO, title: '❌ Cancelar' } },
             ],
           },
