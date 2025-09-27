@@ -411,7 +411,7 @@ export class ChatbotService {
             } finally {
               temporizadoresOferta.delete(pedido.id);
             }
-          }, 60_000);
+          }, 120_000);
 
           temporizadoresOferta.set(pedido.id, to);
 
@@ -2365,7 +2365,7 @@ export class ChatbotService {
             });
 
             // Registrar oferta vigente + timeout para revertir
-            const OFERTA_TIMEOUT_MS = 60_000; // 1 min (mantengo tu valor actual en este bloque)
+            const OFERTA_TIMEOUT_MS = 120_000; // 1 min (mantengo tu valor actual en este bloque)
             const domKey =
               (this as any).toTelKey
                 ? (this as any).toTelKey(domiciliario.telefono_whatsapp)
