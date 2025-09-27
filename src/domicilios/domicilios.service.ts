@@ -5,7 +5,7 @@ import { Domicilio } from './entities/domicilio.entity';
 import { CreateDomicilioDto } from './dto/create-domicilio.dto';
 import { UpdateDomicilioDto } from './dto/update-domicilio.dto';
 import { RegistrarDomiPlataformaDto } from './dto/registrar-domi-plataforma.dto';
-import { Domiciliario } from 'src/domiliarios/entities/domiliario.entity';
+import { Domiciliario } from '../domiliarios/entities/domiliario.entity';
 
 @Injectable()
 export class DomiciliosService {
