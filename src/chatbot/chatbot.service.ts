@@ -1973,7 +1973,7 @@ export class ChatbotService {
 
         await this.enviarMensajeTexto(
           numero,
-          '📍 *Escribe la dirección de recogida* (por ejemplo: "Cra 7 # 12-34, Local 5").'
+          '📍 Escribe el restaurante, local o barrio de Recogida'
         );
         return;
       }
