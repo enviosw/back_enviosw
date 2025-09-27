@@ -1,5 +1,5 @@
 // domiciliarios.service.ts
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Domiciliario } from './entities/domiliario.entity';
@@ -9,7 +9,8 @@ type ResumenDomiciliario = {
   disponible: boolean;
   turno: number; // alias de turno_orden
 };
-
+// Configurable (env) o constante
+const REOFERTA_COOLDOWN_MS = Number(process.env.REOFERTA_COOLDOWN_MS ?? 120_000); // 2 min
 
 @Injectable()
 export class DomiciliariosService {
@@ -54,6 +55,54 @@ async asignarDomiciliarioDisponible(): Promise<Domiciliario> {
       return domi;
     });
   }
+
+
+
+// ✅ Toma el siguiente disponible SIN mover turno_orden,
+//    priorizando la fecha_actualizacion MÁS ANTIGUA y luego el turno_orden.
+async asignarDomiciliarioDisponible2(excluirIds: number[] = []): Promise<Domiciliario> {
+  return this.dataSource.transaction(async (manager) => {
+    const repo = manager.getRepository(Domiciliario);
+
+    const qb = repo
+      .createQueryBuilder('d')
+      .where('d.estado = :activo AND d.disponible = :disp', { activo: true, disp: true })
+      // (opcional) excluye IDs, p. ej. el que acaba de perder/rechazar este mismo pedido
+      .andWhere(excluirIds.length ? 'd.id NOT IN (:...excluir)' : '1=1', { excluir: excluirIds })
+      // 👇 clave: primero el MENOS reciente (más antiguo)
+      .orderBy('d.fecha_actualizacion', 'ASC')
+      .addOrderBy('d.turno_orden', 'ASC')
+      .addOrderBy('d.id', 'ASC')
+      .setLock('pessimistic_write'); // evita carreras al tomar el registro
+
+    const domi = await qb.getOne();
+
+    if (!domi) {
+      throw new NotFoundException('❌ No hay domiciliarios disponibles en este momento.');
+    }
+
+    // 👇 cambiar SOLO disponibilidad (NO tocar turno_orden)
+    const upd = await repo
+      .createQueryBuilder()
+      .update(Domiciliario)
+      .set({ disponible: false })
+      .where('id = :id AND disponible = :disp AND estado = :activo', {
+        id: domi.id,
+        disp: true,
+        activo: true,
+      })
+      .execute();
+
+    if (!upd.affected) {
+      throw new ConflictException('⚠️ El domiciliario ya no está disponible (concurrencia). Reintenta.');
+    }
+
+    const domiActualizado = await repo.findOne({ where: { id: domi.id } });
+    return domiActualizado as Domiciliario;
+  });
+}
+
+
 
   // 🟢 Liberar domiciliario después de completar un pedido
   async liberarDomiciliario(id: number): Promise<void> {
