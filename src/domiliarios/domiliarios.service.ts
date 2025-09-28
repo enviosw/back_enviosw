@@ -59,62 +59,78 @@ async asignarDomiciliarioDisponible(): Promise<Domiciliario> {
 
 
 // ✅ Toma el siguiente disponible SIN mover turno_orden,
-//    priorizando la fecha_actualizacion MÁS ANTIGUA y luego el turno_orden.
-async asignarDomiciliarioDisponible2(excluirIds: number[] = []): Promise<Domiciliario> {
+async asignarDomiciliarioDisponible2(): Promise<Domiciliario> {
   return this.dataSource.transaction(async (manager) => {
     const repo = manager.getRepository(Domiciliario);
 
-    const qb = repo
+    // Toma el primero por turno, pero NO cambia su turno_orden
+    const domi = await repo
       .createQueryBuilder('d')
       .where('d.estado = :activo AND d.disponible = :disp', { activo: true, disp: true })
-      // (opcional) excluye IDs, p. ej. el que acaba de perder/rechazar este mismo pedido
-      .andWhere(excluirIds.length ? 'd.id NOT IN (:...excluir)' : '1=1', { excluir: excluirIds })
-      // 👇 clave: primero el MENOS reciente (más antiguo)
-      .orderBy('d.fecha_actualizacion', 'ASC')
-      .addOrderBy('d.turno_orden', 'ASC')
+      .orderBy('d.turno_orden', 'ASC')
       .addOrderBy('d.id', 'ASC')
-      .setLock('pessimistic_write'); // evita carreras al tomar el registro
-
-    const domi = await qb.getOne();
+      .setLock('pessimistic_write')
+      .getOne();
 
     if (!domi) {
-      throw new NotFoundException('❌ No hay domiciliarios disponibles en este momento.');
+      throw new NotFoundException('No hay domiciliarios disponibles en este momento.');
     }
 
-    // 👇 cambiar SOLO disponibilidad (NO tocar turno_orden)
-    const upd = await repo
+    // Solo lo pone como NO disponible (no mueve el turno)
+    await repo
       .createQueryBuilder()
       .update(Domiciliario)
       .set({ disponible: false })
-      .where('id = :id AND disponible = :disp AND estado = :activo', {
-        id: domi.id,
-        disp: true,
-        activo: true,
-      })
+      .where('id = :id AND disponible = true AND estado = true', { id: domi.id })
       .execute();
 
-    if (!upd.affected) {
-      throw new ConflictException('⚠️ El domiciliario ya no está disponible (concurrencia). Reintenta.');
+    const actualizado = await repo.findOne({ where: { id: domi.id } });
+    if (!actualizado) {
+      throw new NotFoundException('No fue posible actualizar el domiciliario seleccionado.');
     }
-
-    const domiActualizado = await repo.findOne({ where: { id: domi.id } });
-    return domiActualizado as Domiciliario;
+    return actualizado;
   });
 }
 
 
 
-  // 🟢 Liberar domiciliario después de completar un pedido
-  async liberarDomiciliario(id: number): Promise<void> {
-    const domiciliario = await this.domiciliarioRepo.findOneBy({ id });
+async liberarDomiciliario(id: number, moverAlFinal = false): Promise<void> {
+  await this.domiciliarioRepo.manager.transaction(async (manager) => {
+    const repo = manager.getRepository(Domiciliario);
 
-    if (!domiciliario) {
+    // Lock pesimista para evitar carreras al liberar/asignar
+    const domi = await repo
+      .createQueryBuilder('d')
+      .where('d.id = :id', { id })
+      .setLock('pessimistic_write')
+      .getOne();
+
+    if (!domi) {
       throw new NotFoundException(`No se encontró el domiciliario con ID ${id}`);
     }
 
-    domiciliario.disponible = true;
-    await this.domiciliarioRepo.save(domiciliario);
-  }
+    // Armar el update: por defecto solo disponible=true
+    const update: Partial<Domiciliario> = { disponible: true };
+
+    // (Opcional) Mover su turno al final de la cola
+    if (moverAlFinal) {
+      const result = await repo
+        .createQueryBuilder('d')
+        .select('MAX(d.turno_orden)', 'max')
+        .getRawOne<{ max: number | null }>(); // puede ser undefined
+
+      const maxTurno = result?.max ?? 0;
+      update.turno_orden = maxTurno + 1;
+    }
+
+    await repo
+      .createQueryBuilder()
+      .update(Domiciliario)
+      .set(update)
+      .where('id = :id', { id })
+      .execute();
+  });
+}
 
   // 🔁 Reiniciar los turnos (opcional para limpiar el sistema)
   async reiniciarTurnos(): Promise<void> {

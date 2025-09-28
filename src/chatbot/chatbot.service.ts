@@ -288,6 +288,17 @@ export class ChatbotService {
           if (!ofertado) {
             try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
             this.logger.warn(`⛔ Race detectada: pedido ${pedido.id} ya no está pendiente.`);
+            // Enviar botón de cancelar al cliente
+            try {
+              await this.mostrarMenuPostConfirmacion(
+                pedido.numero_cliente,
+                pedido.id,
+                '⏳Estamos buscando un domiciliario disponible, Si ya no lo necesitas, puedes cancelar:',
+                60 * 1000
+              );
+            } catch (e) {
+              this.logger.warn(`⚠️ No se pudo mostrar botón cancelar tras race: ${e?.message || e}`);
+            }
             await pausaSuave();
             procesados++;
             continue;
@@ -1947,8 +1958,21 @@ export class ChatbotService {
 
 
       if (id === 'fin_domi') {
-        const st = estadoUsuarios.get(numero) || {};
-        const conversacionId = st?.conversacionId;
+        let st = estadoUsuarios.get(numero) || {};
+        let conversacionId = st?.conversacionId;
+
+        // Si no hay conversacionId en memoria, intenta buscar la conversación activa en BD
+        if (!conversacionId) {
+          const conversacionActiva = await this.conversacionRepo.findOne({
+            where: { numero_domiciliario: numero, estado: 'activa' }
+          });
+          if (conversacionActiva) {
+            conversacionId = conversacionActiva.id;
+            st.conversacionId = conversacionId;
+            estadoUsuarios.set(numero, st);
+          }
+        }
+
         if (!conversacionId) {
           await this.enviarMensajeTexto(numero, '⚠️ No encontré una conversación activa para finalizar.');
           return;
@@ -1965,15 +1989,13 @@ export class ChatbotService {
         }
 
         // Paso 1: pedir DIRECCIÓN de recogida (cualquier texto)
-        const s = estadoUsuarios.get(numero) || {};
-        s.capturandoDireccionRecogida = true;   // <-- NUEVO
-        s.direccionRecogidaTmp = undefined;     // <-- NUEVO
-        s.capturandoPrecio = false;             // reinicia precio
-        s.confirmandoPrecio = false;
-        s.precioTmp = undefined;
-        // (opcional) asegura guardar el conversacionId si no estaba
-        s.conversacionId = conversacionId;
-        estadoUsuarios.set(numero, s);
+        st.capturandoDireccionRecogida = true;
+        st.direccionRecogidaTmp = undefined;
+        st.capturandoPrecio = false;
+        st.confirmandoPrecio = false;
+        st.precioTmp = undefined;
+        st.conversacionId = conversacionId;
+        estadoUsuarios.set(numero, st);
 
         await this.enviarMensajeTexto(
           numero,
@@ -2835,10 +2857,10 @@ export class ChatbotService {
         type: 'interactive',
         interactive: {
           type: 'button',
-          body: { text: '¿Es correcto?' },
+          body: { text: '¿Confirmas el pedido? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
           action: {
             buttons: [
-              { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí' } },
+              { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
               { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
               { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
             ],
@@ -2962,10 +2984,10 @@ export class ChatbotService {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                body: { text: '¿Es correcto ahora?' },
+                body: { text: '¿Deseas confirmar ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
                 action: {
                   buttons: [
-                    { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí' } },
+                    { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
                     { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
                     { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
                   ],
@@ -3091,7 +3113,7 @@ export class ChatbotService {
         estado.listaItems.push(txt); // ← puede ser cualquier cosa (texto libre)
         await this.enviarMensajeTexto(
           numero,
-          `➕ Ítem agregado: *${txt}*\n Escribe *LISTO* para terminar.`
+          `➕ Agregado: *${txt}*\n Escribe *LISTO* para terminar.`
         );
         break;
       }
@@ -3148,10 +3170,11 @@ export class ChatbotService {
             type: 'interactive',
             interactive: {
               type: 'button',
-              body: { text: '¿Es correcto?' },
+              body: { text: '¿Confirmas el pedido? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
+
               action: {
                 buttons: [
-                  { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
+                  { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí, confirmar' } },
                   { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
                   { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
                 ],
@@ -3199,10 +3222,10 @@ export class ChatbotService {
           type: 'interactive',
           interactive: {
             type: 'button',
-            body: { text: '¿Es correcto?' },
+            body: { text: '¿Es correcto? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
             action: {
               buttons: [
-                { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí' } },
+                { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí, confirmar' } },
                 { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
                 { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
               ],
@@ -3320,10 +3343,10 @@ export class ChatbotService {
         type: 'interactive',
         interactive: {
           type: 'button',
-          body: { text: '¿Es correcto?' },
+          body: { text: '¿Es correcto? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
           action: {
             buttons: [
-              { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí' } },
+              { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
               { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
               { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
 
@@ -3471,10 +3494,10 @@ export class ChatbotService {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                body: { text: '¿Es correcto ahora?' },
+                body: { text: '¿Es correcto ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
                 action: {
                   buttons: [
-                    { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí' } },
+                    { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
                     { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
                     { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
 
@@ -4030,7 +4053,7 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
     const t = setTimeout(() => {
       this.reiniciarPorInactividad(numero);
-    }, 25 * 60 * 1000); // 10 minutos
+    }, 30 * 60 * 1000); // 30 minutos
 
     temporizadoresInactividad.set(numero, t);
   }
