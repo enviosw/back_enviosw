@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, FindManyOptions, Repository } from 'typeorm';
+import { DataSource, DeepPartial, FindManyOptions, Repository } from 'typeorm';
 import { Domicilio } from './entities/domicilio.entity';
 import { CreateDomicilioDto } from './dto/create-domicilio.dto';
 import { UpdateDomicilioDto } from './dto/update-domicilio.dto';
@@ -20,13 +20,26 @@ export class DomiciliosService {
   // =========================
 
   async create(createDomicilioDto: CreateDomicilioDto): Promise<Domicilio> {
-    const nuevo = this.domicilioRepo.create(createDomicilioDto);
-    return this.domicilioRepo.save(nuevo);
-  }
+  const { cliente, ...rest } = createDomicilioDto as any;
+
+  // cliente -> id_cliente (soporta número u objeto {id})
+  const rawCliente = (cliente && typeof cliente === 'object') ? cliente.id : cliente;
+  const parsedIdCliente = Number.isFinite(Number(rawCliente)) ? Number(rawCliente) : null;
+
+  const payload: DeepPartial<Domicilio> = {
+    ...rest,
+    id_cliente: parsedIdCliente,
+  };
+
+  // 🔒 Tipos explícitos para que tome el overload de entidad
+  const nuevo: Domicilio = this.domicilioRepo.create(payload as DeepPartial<Domicilio>);
+  const guardado: Domicilio = await this.domicilioRepo.save<Domicilio>(nuevo);
+  return guardado;
+}
 
   async findAll(): Promise<Domicilio[]> {
     return this.domicilioRepo.find({
-      relations: ['domiciliario', 'cliente'],
+      relations: ['domiciliario'],
       order: { fecha_creacion: 'DESC' },
     });
   }
@@ -49,7 +62,6 @@ async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
   async findOne(id: number): Promise<Domicilio> {
     const domicilio = await this.domicilioRepo.findOne({
       where: { id },
-      relations: ['domiciliario', 'cliente'],
     });
     if (!domicilio) {
       throw new NotFoundException(`Domicilio con ID ${id} no encontrado`);
@@ -345,5 +357,20 @@ async marcarEntregadoSiAsignado(pedidoId: number, domiId?: number): Promise<bool
   });
 }
 
+  async asignarSiPendiente(pedidoId: number, domiId: number): Promise<boolean> {
+    const now = new Date();
+    const res = await this.domicilioRepo.createQueryBuilder()
+      .update(Domicilio)
+      .set({
+        estado: 1,
+        fecha_asignacion: now,
+        // relación por FK existente
+        domiciliario: { id: domiId } as any,
+      })
+      .where('id = :id', { id: pedidoId })
+      .andWhere('estado = :pend', { pend: 0 })
+      .execute();
 
+    return (res.affected ?? 0) > 0;
+  }
 }

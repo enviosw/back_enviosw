@@ -3,7 +3,6 @@ import {
   UpdateDateColumn, JoinColumn, Index
 } from 'typeorm';
 import { Domiciliario } from '../../domiliarios/entities/domiliario.entity';
-import { Cliente } from '../../clientes/entities/cliente.entity';
 
 export enum DomicilioEstado {
   PENDIENTE = 0,
@@ -40,9 +39,10 @@ export class Domicilio {
   @JoinColumn({ name: 'id_domiciliario' })
   domiciliario: Domiciliario;
 
-  @ManyToOne(() => Cliente, { nullable: true })
-  @JoinColumn({ name: 'id_cliente' })
-  cliente: Cliente;
+  // ✅ después
+  @Column({ name: 'id_cliente', type: 'int', nullable: true })
+  id_cliente: number | null;
+
 
   @Column({ length: 30 })
   tipo_servicio: string;

@@ -24,6 +24,23 @@ export class ComerciosService {
     return await this.comercioRepo.save(comercio);
   }
 
+  
+  // En ComerciosService
+async getById(id: number) {
+  return this.comercioRepo.createQueryBuilder('c')
+    .select([
+      'c.id',
+      'c.nombre_comercial',
+      'c.razon_social',
+      'c.telefono',
+      'c.telefono_secundario',
+      'c.direccion',
+    ])
+    .where('c.id = :id', { id })
+    .getOne();
+}
+
+
 
   async searchAll(search: string) {
     const qb = this.comercioRepo
@@ -281,23 +298,25 @@ export class ComerciosService {
   }
 
 
-  async findByTelefono(telefono: string): Promise<{ nombre: string; telefono: string; direccion: string }> {
-    const comercio = await this.comercioRepo
-      .createQueryBuilder('comercio')
-      .select(['comercio.nombre_comercial', 'comercio.telefono', 'comercio.direccion'])
-      .where('TRIM(comercio.telefono) = :telefono', { telefono })
-      .getOne();
+async findByTelefono(telefono: string): Promise<{ id: number; nombre: string; telefono: string; direccion: string }> {
+  const comercio = await this.comercioRepo
+    .createQueryBuilder('comercio')
+    .select(['comercio.id', 'comercio.nombre_comercial', 'comercio.telefono', 'comercio.direccion'])
+    .where('TRIM(comercio.telefono) = :telefono', { telefono })
+    .getOne();
 
-    if (!comercio) {
-      throw new NotFoundException(`No se encontró un comercio con el teléfono ${telefono}`);
-    }
-
-    return {
-      nombre: comercio.nombre_comercial,
-      telefono: comercio.telefono,
-      direccion: comercio.direccion,
-    };
+  if (!comercio) {
+    throw new NotFoundException(`No se encontró un comercio con el teléfono ${telefono}`);
   }
+
+  return {
+    id: comercio.id,
+    nombre: comercio.nombre_comercial,
+    telefono: comercio.telefono,
+    direccion: comercio.direccion,
+  };
+}
+
 
 
   async aumentarCLicks(id: number): Promise<void> {

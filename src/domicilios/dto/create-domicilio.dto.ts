@@ -24,7 +24,7 @@ export class CreateDomicilioDto {
 
     @IsOptional()
     @IsInt()
-    id_cliente?: number | null;
+    cliente?: number | null;
 
 
     @IsString()
