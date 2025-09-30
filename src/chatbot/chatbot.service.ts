@@ -278,6 +278,101 @@ export class ChatbotService {
           // 3) Detectar tipo
           const tipo = String(pedido?.tipo_servicio || '').trim();
           const esSticker = tipo.toLowerCase() === 'sticker';
+          const esCompras = tipo == "2"; // 👈 nuevo flag
+
+          if (esCompras) {
+            if (!domiciliario) {
+              this.logger.warn(`⚠️ Sin domiciliarios para compras id=${pedido.id}.`);
+              await this.mostrarMenuPostConfirmacion(
+                pedido.numero_cliente,
+                pedido.id,
+                '🚨 En este momento no hay domiciliarios disponibles.\n\n' +
+                '⏳ Podemos reintentar en unos minutos, o puedes cancelar tu pedido.',
+                5 * 60 * 1000
+              );
+              await pausaSuave();
+              procesados++;
+              continue;
+            }
+
+            // Marcar ofertado atómico
+            const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
+              pedido.id,
+              domiciliario.id
+            );
+            if (!ofertado) {
+              try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
+              this.logger.warn(`⛔ Race detectada: compras p=${pedido.id} ya no está pendiente.`);
+              await pausaSuave();
+              procesados++;
+              continue;
+            }
+
+            // 📝 MENSAJE TAL CUAL DEL CLIENTE
+            const detalleCliente = (pedido.detalles_pedido ?? '').toString().trim() || '(sin detalle)';
+            const resumenLargo = this.sanitizeWaBody(
+              [
+                '📦 *Nuevo pedido de COMPRAS disponible*',
+                '',
+                '📝 *Mensaje del cliente:*',
+                detalleCliente,
+                '',
+                `🆔 Pedido #${pedido.id}`,
+              ].join('\n')
+            ).slice(0, 1024); // límite seguro para body de botones
+
+            try {
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: domiciliario.telefono_whatsapp,
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: resumenLargo },
+                  action: {
+                    buttons: [
+                      { type: 'reply', reply: { id: `ACEPTAR_${pedido.id}`, title: '✅ Aceptar' } },
+                      { type: 'reply', reply: { id: `RECHAZAR_${pedido.id}`, title: '❌ Rechazar' } },
+                    ],
+                  },
+                },
+              }, { timeout: 7000 });
+            } catch (e: any) {
+              this.logger.warn(
+                `⚠️ Falló oferta de compras al domi ${domiciliario.telefono_whatsapp} p=${pedido.id}: ${e?.response?.data?.error?.message || e?.message || e}`
+              );
+            }
+
+            // Guardar oferta + timeout (usa tu misma lógica)
+            ofertasVigentes.set(pedido.id, {
+              expira: Date.now() + OFERTA_TIMEOUT_MS, // si no existe, define: const OFERTA_TIMEOUT_MS = 120_000;
+              domi: this.toTelKey(domiciliario.telefono_whatsapp),
+            });
+
+            const prev = temporizadoresOferta.get(pedido.id);
+            if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedido.id); }
+
+            const to = setTimeout(async () => {
+              try {
+                const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedido.id);
+                if (volvio) {
+                  try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch { }
+                  this.logger.warn(`⏰ Domi no respondió. Pedido ${pedido.id} vuelve a pendiente.`);
+                  ofertasVigentes.delete(pedido.id);
+                }
+              } catch (e) {
+                this.logger.error(`Timeout oferta falló para pedido ${pedido.id}: ${e?.message || e}`);
+              } finally {
+                temporizadoresOferta.delete(pedido.id);
+              }
+            }, OFERTA_TIMEOUT_MS);
+
+            temporizadoresOferta.set(pedido.id, to);
+
+            await pausaSuave();
+            procesados++;
+            continue; // ⬅️ listo compras, siguiente pedido
+          }
 
           // ============================
           // ✅ CASO STICKER (nuevo flujo)
@@ -648,7 +743,7 @@ export class ChatbotService {
       // const esDomi = await this.domiciliarioService.esDomiciliario(numero).catch(() => false);
       // if (!esDomi && horaBOG >= 1 && horaBOG < 5) { ... }
 
-      if (horaBOG >= 1 && horaBOG < 5) {
+      if (horaBOG >= 2 && horaBOG < 5) {
         await this.enviarMensajeTexto(
           numero,
           [
@@ -657,8 +752,69 @@ export class ChatbotService {
             'Por favor escríbenos a partir de las *5:00 a. m.*. ¡Gracias por tu comprensión! 🙏'
           ].join('\n')
         );
+
+        // 🔑 Normaliza clave
+        const numeroKey = this.toKey ? this.toKey(numero) : (numero || '');
+
+        // 🧹 Limpia estados en memoria (no BD)
+        try {
+          // estado principal
+          estadoUsuarios.delete(numero);
+          estadoUsuarios.delete(numeroKey);
+
+          // bloqueos/flags auxiliares
+          try { bloqueoMenu?.delete?.(numero); } catch { }
+          try { bloqueoMenu?.delete?.(numeroKey); } catch { }
+
+          // timers por número (si los usas)
+          try {
+            if (temporizadoresEstado?.has?.(numero)) {
+              clearTimeout(temporizadoresEstado.get(numero)!);
+              temporizadoresEstado.delete(numero);
+            }
+            if (temporizadoresEstado?.has?.(numeroKey)) {
+              clearTimeout(temporizadoresEstado.get(numeroKey)!);
+              temporizadoresEstado.delete(numeroKey);
+            }
+          } catch { }
+
+          try {
+            if (temporizadoresInactividad?.has?.(numero)) {
+              clearTimeout(temporizadoresInactividad.get(numero)!);
+              temporizadoresInactividad.delete(numero);
+            }
+            if (temporizadoresInactividad?.has?.(numeroKey)) {
+              clearTimeout(temporizadoresInactividad.get(numeroKey)!);
+              temporizadoresInactividad.delete(numeroKey);
+            }
+          } catch { }
+
+          // cachés anti-doble click / idempotencia con prefijo por número (si existen)
+          try {
+            for (const k of (cancelacionesProcesadas?.keys?.() ?? [])) {
+              if (typeof k === 'string' && k.startsWith(`${numero}:`)) {
+                cancelacionesProcesadas.delete(k);
+              }
+            }
+          } catch { }
+
+          try {
+            for (const k of (procesados?.keys?.() ?? [])) {
+              if (typeof k === 'string' && k.startsWith(`${numero}:`)) {
+                procesados.delete(k);
+              }
+            }
+          } catch { }
+
+          // cualquier otra estructura por número que mantengas:
+          // try { notifsPrecioCache?.clear?.(); } catch {}
+        } catch (e) {
+          this.logger.warn(`⚠️ Limpieza fuera de horario falló para ${numero}: ${e instanceof Error ? e.message : e}`);
+        }
+
         return; // 🚫 No procesar nada más del mensaje
       }
+
     } catch (e) {
       // Si algo falla, no bloquees el flujo por el horario
       this.logger.warn(`⚠️ No se pudo evaluar horario de Bogotá: ${e instanceof Error ? e.message : e}`);
@@ -2542,36 +2698,91 @@ export class ChatbotService {
             // Notificar al cliente (opcional) y mantener botón cancelar ya enviado
             await this.enviarMensajeTexto(numero, '⏳ Estamos *procesando* tu pedido. Gracias por preferirnos');
 
-            // ——— construir RESUMEN y OFERTAR con helper
-            const partes: string[] = [];
-            partes.push('📦 *Nuevo pedido disponible*', '');
-            partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio')}`);
+            // ——— construir y ENVIAR la oferta al domi (sin helper) ———
+            if (id === 'confirmar_compra' || tipo === '2') {
+              // 🛒 CASO COMPRAS: enviar el MENSAJE TAL CUAL al domiciliario
+              const detalleCliente = (datos.listaCompras ?? '').toString().trim() || '(sin detalle)';
+              const resumenLargo = this.sanitizeWaBody(
+                [
+                  '📦 *Nuevo pedido disponible:*',
+                  '',
+                  `🔁 *Tipo de servicio:* ${String(tipo || 'servicio')}`,
+                  '',
+                  '📝 *Detalle del cliente:*',
+                  detalleCliente,
+                ].join('\n')
+              ).slice(0, 1024); // Body máx. 1024 chars
 
-            if (datos.listaCompras) {
-              const listaRaw = String(datos.listaCompras).trim().replace(/\r\n?/g, '\n');
-              const listaFmt = /\n/.test(listaRaw) ? listaRaw : listaRaw.replace(/,\s*/g, '\n');
-              partes.push('🛒 *Lista de compras:*\n' + listaFmt);
-              partes.push('');
-            }
-            if (datos.direccionRecoger) {
-              partes.push(`📍 *Recoger en:*\n${datos.direccionRecoger}`);
-              partes.push(`\n📞 *Tel:*\n${datos.telefonoRecoger || ''}`);
-              partes.push('');
-            }
-            const entregarDir = datos.direccionEntregar || datos.direccionEntrega;
-            const telEntregar = datos.telefonoEntregar || datos.telefonoEntrega;
-            if (entregarDir) {
-              partes.push(`🏠 *Entregar en:*\n${entregarDir}`);
-              partes.push(`\n📞 *Tel:*\n${telEntregar || ''}`);
-              partes.push('');
-            }
-            const resumenLargo = this.sanitizeWaBody(partes.join('\n'));
+              try {
+                await axiosWhatsapp.post('/messages', {
+                  messaging_product: 'whatsapp',
+                  to: domiciliario.telefono_whatsapp,
+                  type: 'interactive',
+                  interactive: {
+                    type: 'button',
+                    body: { text: resumenLargo },
+                    action: {
+                      buttons: [
+                        { type: 'reply', reply: { id: `ACEPTAR_${pedidoBase.id}`, title: '✅ Aceptar' } },
+                        { type: 'reply', reply: { id: `RECHAZAR_${pedidoBase.id}`, title: '❌ Rechazar' } },
+                      ],
+                    },
+                  },
+                }, { timeout: 7000 });
+              } catch (e: any) {
+                this.logger.warn(
+                  `⚠️ Falló oferta al domi ${domiciliario.telefono_whatsapp} p=${pedidoBase.id}: ${e?.response?.data?.error?.message || e?.message || e}`
+                );
+              }
+            } else {
+              // 🧾 SERVICIOS 1 y 3: se mantiene tu resumen original
+              const partes: string[] = [];
+              partes.push('📦 *Nuevo pedido disponible*', '');
+              partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio')}`);
 
-            await this.enviarOfertaAceptarRechazarConId({
-              telefonoDomi: domiciliario.telefono_whatsapp,
-              pedidoId: pedidoBase.id,
-              resumenLargo,
-            });
+              if (datos.listaCompras) {
+                const listaRaw = String(datos.listaCompras).trim().replace(/\r\n?/g, '\n');
+                const listaFmt = /\n/.test(listaRaw) ? listaRaw : listaRaw.replace(/,\s*/g, '\n');
+                partes.push('🛒 *Lista de compras:*\n' + listaFmt);
+                partes.push('');
+              }
+              if (datos.direccionRecoger) {
+                partes.push(`📍 *Recoger en:*\n${datos.direccionRecoger}`);
+                partes.push(`\n📞 *Tel:*\n${datos.telefonoRecoger || ''}`);
+                partes.push('');
+              }
+              const entregarDir = datos.direccionEntregar || datos.direccionEntrega;
+              const telEntregar = datos.telefonoEntregar || datos.telefonoEntrega;
+              if (entregarDir) {
+                partes.push(`🏠 *Entregar en:*\n${entregarDir}`);
+                partes.push(`\n📞 *Tel:*\n${telEntregar || ''}`);
+                partes.push('');
+              }
+              const resumenLargo = this.sanitizeWaBody(partes.join('\n')).slice(0, 1024);
+
+              try {
+                await axiosWhatsapp.post('/messages', {
+                  messaging_product: 'whatsapp',
+                  to: domiciliario.telefono_whatsapp,
+                  type: 'interactive',
+                  interactive: {
+                    type: 'button',
+                    body: { text: resumenLargo },
+                    action: {
+                      buttons: [
+                        { type: 'reply', reply: { id: `ACEPTAR_${pedidoBase.id}`, title: '✅ Aceptar' } },
+                        { type: 'reply', reply: { id: `RECHAZAR_${pedidoBase.id}`, title: '❌ Rechazar' } },
+                      ],
+                    },
+                  },
+                }, { timeout: 7000 });
+              } catch (e: any) {
+                this.logger.warn(
+                  `⚠️ Falló oferta al domi ${domiciliario.telefono_whatsapp} p=${pedidoBase.id}: ${e?.response?.data?.error?.message || e?.message || e}`
+                );
+              }
+            }
+            // ——— fin armado oferta ———
 
             // Registrar oferta vigente + timeout para revertir
             const OFERTA_TIMEOUT_MS = 120_000; // 1 min (mantengo tu valor actual en este bloque)
@@ -2679,6 +2890,7 @@ export class ChatbotService {
           estadoUsuarios.set(numero, s);
         }
       }
+
 
 
 
@@ -3197,232 +3409,107 @@ export class ChatbotService {
   }
 
 
+  // 🛒 COMPRA ULTRA SIMPLE con botones válidos y guard contra duplicados
+  // - Toma el mensaje TAL CUAL y lo guarda en listaCompras (incluye lista, dirección y teléfono)
+  // - Envia botones con títulos <= 20 chars (requisito WhatsApp)
+  // - Evita reenvíos duplicados del resumen en una ventana corta (30s)
+
   async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
     const estado = estadoUsuarios.get(numero) || {
       paso: 0,
       datos: {} as any,
       tipo: 'opcion_2',
-      listaItems: [] as string[],
     };
 
-    // Asegurar array
-    if (!Array.isArray(estado.listaItems)) {
-      estado.listaItems = [];
-    }
+    const txt = (mensaje ?? '').toString().trim();
 
-    const txt = (mensaje ?? '').trim();
-
-    // Helpers
-
-    /**
-     * Extrae el ÚLTIMO teléfono válido de 10 dígitos desde el texto completo.
-     * - Acepta cualquier formato: con espacios, guiones, paréntesis, puntos, +57 / 57, o pegado a otros números.
-     * - Regla: toma SIEMPRE los últimos 10 dígitos del conjunto total de dígitos del mensaje.
-     * - Si el texto no tiene al menos 10 dígitos en total, retorna null.
-     */
-    const extraerTelefono10 = (t?: string): string | null => {
-      if (!t) return null;
-      const digits = (String(t).match(/\d/g) || []).join('');
-      if (digits.length < 10) return null;
-      return digits.slice(-10);
-    };
-
-    /**
-     * Quita del texto la PRIMERA ocurrencia del teléfono detectado (10 dígitos normalizados)
-     * en formatos comunes (con separadores, paréntesis, con/ sin 57/+57).
-     */
-    const quitarTelefonoDelTexto = (texto: string, t10: string) => {
-      if (!texto || !t10) return texto;
-
-      const formats = [
-        t10,
-        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1 $2 $3'),
-        t10.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3'),
-        t10.replace(/(\d{3})(\d{7})/, '$1 $2'),
-        t10.replace(/(\d{3})(\d{7})/, '$1-$2'),
-        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1 $2 $3 $4'),
-        t10.replace(/(\d{3})(\d{3})(\d{2})(\d{2})/, '$1-$2-$3-$4'),
-        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
-        t10.replace(/(\d{3})(\d{2})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
-        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
-        t10.replace(/(\d{3})(\d{2})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
-        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1 $2 $3 $4'),
-        t10.replace(/(\d{2})(\d{3})(\d{3})(\d{2})/, '$1-$2-$3-$4'),
-        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1 $2 $3 $4'),
-        t10.replace(/(\d{2})(\d{3})(\d{2})(\d{3})/, '$1-$2-$3-$4'),
-        `(${t10.slice(0, 3)}) ${t10.slice(3)}`,
-        `57${t10}`, `57 ${t10}`, `57-${t10}`,
-        `+57${t10}`, `+57 ${t10}`, `+57-${t10}`,
-      ];
-
-      const patrones = formats.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const re = new RegExp(patrones.join('|'), 'i');
-      return texto.replace(re, '').replace(/\s{2,}/g, ' ').trim();
-    };
-
-    const direccionValida = (t?: string) => !!t && t.trim().length >= 5;
-    const esFinLista = (s: string) => /^(listo|fin|ok)$/i.test((s || '').trim());
+    // Ventana anti-duplicados (30s)
+    const RESUMEN_GUARD_MS = 30_000;
 
     switch (estado.paso) {
-      // 0) Pedir lista
       case 0: {
         await this.enviarMensajeTexto(
           numero,
-          '🛒 Envía la lista completa o escribe uno por uno lo que necesitas.\n\n👉 Escribe *LISTO* cuando termines.'
+          [
+            '🛒 *Para tu compra envíame todo en un solo ✍mensaje o texto:*',
+            '',
+            '✅ Lista y cantidad de productos',
+            '✅ Lugar de preferencia',
+            '',
+            '',
+            '📍Dirección de entrega:',
+            '📞Número telefónico',
+          ].join('\n')
         );
         estado.paso = 1;
         break;
       }
 
-      // 1) Recibir ítems hasta LISTO
       case 1: {
-        if (esFinLista(txt)) {
-          if (!estado.listaItems.length) {
-            await this.enviarMensajeTexto(numero, '⚠️ Agrega al menos un item o algo antes de terminar.');
-            break;
-          }
-          estado.datos.listaCompras = estado.listaItems.join('\n');
-          estado.paso = 2;
-          await this.enviarMensajeTexto(
-            numero,
-            '✅ Ingresa:\n\n' +
-            '📍 Dirección de entrega\n' +
-            '📞 Número telefónico 10 dígitos'
-          );
+        const detalle = txt || '(sin detalle)';
+
+        // 🛡️ Idempotencia: si ya mostramos resumen para el mismo detalle hace <30s, no repitas
+        if (
+          estado._ultimoResumen === detalle &&
+          typeof estado._ultimoResumenTs === 'number' &&
+          Date.now() - estado._ultimoResumenTs < RESUMEN_GUARD_MS
+        ) {
+          // No volver a enviar nada
           break;
         }
 
-        if (txt.length < 2) {
-          await this.enviarMensajeTexto(numero, '⚠️ Envía un ítem válido o escribe *LISTO*.');
-          break;
-        }
+        // Guardar TAL CUAL el mensaje en listaCompras
+        estado.datos.listaCompras = detalle;
 
-        estado.listaItems.push(txt); // ← puede ser cualquier cosa (texto libre)
+        // Campos opcionales (no validamos ni extraemos)
+        estado.datos.direccionEntrega = 'N/D';
+        estado.datos.telefonoEntrega = 'N/D';
+
+        // Resumen
         await this.enviarMensajeTexto(
           numero,
-          `➕ Agregado: *${txt}*\n Escribe *LISTO* para terminar.`
+          [
+            '✅ *Revisa tu pedido:*',
+            '',
+            '🛒 *Detalle completo (lista + dirección + teléfono):*',
+            detalle,
+          ].join('\n')
         );
-        break;
-      }
 
-      // 2) Dirección (cualquier texto válido) y posible teléfono en el mismo mensaje
-      case 2: {
-        // 🔒 Validación añadida: debe existir al menos 1 ítem en la lista
-        if (!estado.listaItems.length) {
-          await this.enviarMensajeTexto(
-            numero,
-            '⚠️ Primero agrega *al menos un producto*.\nEnvía tu lista y escribe *LISTO* para continuar.'
-          );
-          estado.paso = 1;
-          break;
-        }
-
-        if (!txt) {
-          await this.enviarMensajeTexto(numero, '⚠️ Escribe la *dirección de entrega*');
-          break;
-        }
-
-        // Intentar extraer teléfono del mismo mensaje
-        const tel10 = extraerTelefono10(txt);
-        const direccionCruda = tel10 ? quitarTelefonoDelTexto(txt, tel10) : txt;
-
-        if (!direccionValida(direccionCruda)) {
-          await this.enviarMensajeTexto(
-            numero,
-            '⚠️ Dirección inválida. Escribe una dirección válida (mín. 5 caracteres).'
-          );
-          break;
-        }
-
-        // Guardar dirección
-        estado.datos.direccionEntrega = direccionCruda;
-
-        if (tel10) {
-          // Si vino teléfono válido junto → guardar y saltar al resumen
-          estado.datos.telefonoEntrega = tel10;
-          estado.paso = 4;
-
-          const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
-          await this.enviarMensajeTexto(
-            numero,
-            '✅ Verifica:\n\n' +
-            `🛒 Lista:\n${listaCompras}\n\n` +
-            `🏠 Entrega: ${direccionEntrega}\n` +
-            `📞 Tel: ${telefonoEntrega}`
-          );
-
+        // 🔘 Botones (títulos ≤ 20 chars para evitar 131009)
+        try {
           await axiosWhatsapp.post('/messages', {
             messaging_product: 'whatsapp',
             to: numero,
             type: 'interactive',
             interactive: {
               type: 'button',
-              body: { text: '¿Confirmas el pedido? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
-
+              body: { text: '¿Confirmas el pedido?' },
               action: {
                 buttons: [
-                  { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí, confirmar' } },
-                  { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
+                  { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Confirmar' } },
+                  { type: 'reply', reply: { id: 'editar_compra', title: '🔁 Editar' } },
                   { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
                 ],
               },
             },
-          });
-          break;
-        }
-
-        // Si no vino teléfono, pedirlo
-        estado.paso = 3;
-        await this.enviarMensajeTexto(
-          numero,
-          '📞 Ahora envía el *teléfono de entrega* (debe tener *10 dígitos*)'
-        );
-        break;
-      }
-
-      // 3) Teléfono y resumen
-      case 3: {
-        const tel10 = extraerTelefono10(txt);
-        if (!tel10) {
-          await this.enviarMensajeTexto(
-            numero,
-            '⚠️ Teléfono inválido. Debe tener *10 dígitos*.'
+          }, { timeout: 7000 });
+        } catch (e: any) {
+          // Si por alguna razón vuelve a fallar, loguea claro para depurar
+          this.logger.warn(
+            `⚠️ Falló envío de botones compra: ${e?.response?.data?.error?.message || e?.message || e}`
           );
-          break;
         }
 
-        estado.datos.telefonoEntrega = tel10;
-        estado.paso = 4;
+        // Marca anti-duplicados
+        estado._ultimoResumen = detalle;
+        estado._ultimoResumenTs = Date.now();
 
-        const { listaCompras, direccionEntrega, telefonoEntrega } = estado.datos;
-        await this.enviarMensajeTexto(
-          numero,
-          '✅ Verifica:\n\n' +
-          `🛒 Lista:\n${listaCompras}\n\n` +
-          `🏠 Entrega: ${direccionEntrega}\n` +
-          `📞 Tel: ${telefonoEntrega}`
-        );
-
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: numero,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: '¿Es correcto? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Sí, confirmar' } },
-                { type: 'reply', reply: { id: 'editar_compra', title: '🔁 No, editar' } },
-                { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
-              ],
-            },
-          },
-        });
         break;
       }
 
       default: {
+        // Reinicio suave si algo se desordenó
         estadoUsuarios.delete(numero);
         await this.opcion2PasoAPaso(numero, '');
         return;
@@ -3431,6 +3518,7 @@ export class ChatbotService {
 
     estadoUsuarios.set(numero, estado);
   }
+
 
 
 
