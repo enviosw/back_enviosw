@@ -10,6 +10,7 @@ import {
   Body,
   Put,
   Patch,
+  Delete,
 } from '@nestjs/common';
 import { DomiciliariosService } from './domiliarios.service';
 import { Domiciliario } from './entities/domiliario.entity';
@@ -98,5 +99,12 @@ export class DomiciliariosController {
     const dom = await this.domiciliariosService.getById(id);
     if (!dom) throw new NotFoundException(`Domiciliario ID ${id} no existe`);
     return dom;
+  }
+
+  // 🗑️ Eliminar un domiciliario por ID
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async eliminar(@Param('id', ParseIntPipe) id: number): Promise<void> {
+    await this.domiciliariosService.deleteById(id);
   }
 }

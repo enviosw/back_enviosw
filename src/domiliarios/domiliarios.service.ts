@@ -317,5 +317,13 @@ async setDisponibleManteniendoTurnoByTelefono(telefono: string, disponible = tru
 }
 
 
+  // 🔥 Eliminar (hard delete) un domiciliario por ID
+  async deleteById(id: number): Promise<void> {
+    const exists = await this.domiciliarioRepo.exists({ where: { id } });
+    if (!exists) {
+      throw new NotFoundException(`No se encontró domiciliario con ID ${id}`);
+    }
+    await this.domiciliarioRepo.delete(id);
+  }
 
 }

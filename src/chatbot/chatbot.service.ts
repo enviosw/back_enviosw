@@ -280,6 +280,117 @@ export class ChatbotService {
           const esSticker = tipo.toLowerCase() === 'sticker';
           const esCompras = tipo == "2"; // 👈 nuevo flag
 
+          const esAuto    = tipo.toLowerCase() === 'auto'; // 👈 NUEVO
+
+          // ============================
+// 🚗 CASO AUTO: reenviar SOLO los detalles al domi
+// ============================
+if (esAuto) {
+  if (!domiciliario) {
+    this.logger.warn(`⚠️ Sin domiciliarios para pedido AUTO id=${pedido.id}.`);
+    await this.mostrarMenuPostConfirmacion(
+      pedido.numero_cliente,
+      pedido.id,
+      '🚨 En este momento no hay domiciliarios disponibles.\n\n' +
+      '⏳ Podemos reintentar en unos minutos, o puedes cancelar tu pedido.',
+      5 * 60 * 1000
+    );
+    await pausaSuave();
+    procesados++;
+    continue;
+  }
+
+  // Marcar ofertado atómico
+  const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
+    pedido.id,
+    domiciliario.id
+  );
+  if (!ofertado) {
+    try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch {}
+    this.logger.warn(`⛔ Race detectada: AUTO p=${pedido.id} ya no está pendiente.`);
+    await pausaSuave();
+    procesados++;
+    continue;
+  }
+
+  // 📝 Mensaje TAL CUAL del cliente (desde la página)
+  // Ejemplo:
+  // ¡Hola! Quiero coordinar una recogida y entrega:
+  // Dirección de Recogida: RECOGIDA 1
+  // Teléfono de Recogida: 3124657890
+  // Dirección de Entrega: CALLE 123
+  // Teléfono de Entrega: 3125430976
+// 📝 Mensaje TAL CUAL del cliente (desde la página)
+const detallePlano = (pedido.detalles_pedido ?? '').toString().trim();
+
+// Encabezado + tipo + detalles, con saltos de línea entre frases
+const mensajeAuto = [
+  '📦 *Nuevo pedido asignado*',
+  '',
+  '🧩 *Tipo:* Pedido desde la página (AUTO)',
+  '',
+  '📝 *Detalles:*',
+  detallePlano || '(sin detalle)',
+].join('\n');
+
+const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // límite seguro
+
+  // Enviar OFERTA al domi con botones (sin encabezados extras)
+  try {
+    await axiosWhatsapp.post('/messages', {
+      messaging_product: 'whatsapp',
+      to: domiciliario.telefono_whatsapp,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodySoloDetalles },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: `ACEPTAR_${pedido.id}`,  title: '✅ Aceptar'  } },
+            { type: 'reply', reply: { id: `RECHAZAR_${pedido.id}`, title: '❌ Rechazar' } },
+          ],
+        },
+      },
+    }, { timeout: 7000 });
+  } catch (e: any) {
+    this.logger.warn(
+      `⚠️ Falló oferta AUTO al domi ${domiciliario.telefono_whatsapp} p=${pedido.id}: ` +
+      (e?.response?.data?.error?.message || e?.message || e)
+    );
+  }
+
+  // Registrar oferta + timeout de expiración
+  ofertasVigentes.set(pedido.id, {
+    expira: Date.now() + OFERTA_TIMEOUT_MS,
+    domi: this.toTelKey(domiciliario.telefono_whatsapp),
+  });
+
+  const prev = temporizadoresOferta.get(pedido.id);
+  if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedido.id); }
+
+  const to = setTimeout(async () => {
+    try {
+      const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedido.id);
+      if (volvio) {
+        try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch {}
+        this.logger.warn(`⏰ Domi no respondió. Pedido AUTO ${pedido.id} vuelve a pendiente.`);
+        ofertasVigentes.delete(pedido.id);
+      }
+    } catch (e) {
+      this.logger.error(`Timeout oferta AUTO falló para pedido ${pedido.id}: ${e?.message || e}`);
+    } finally {
+      temporizadoresOferta.delete(pedido.id);
+    }
+  }, OFERTA_TIMEOUT_MS);
+
+  temporizadoresOferta.set(pedido.id, to);
+
+  await pausaSuave();
+  procesados++;
+  continue; // ⬅️ listo AUTO, siguiente pedido
+}
+
+
           if (esCompras) {
             if (!domiciliario) {
               this.logger.warn(`⚠️ Sin domiciliarios para compras id=${pedido.id}.`);
