@@ -854,7 +854,7 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
       // const esDomi = await this.domiciliarioService.esDomiciliario(numero).catch(() => false);
       // if (!esDomi && horaBOG >= 1 && horaBOG < 5) { ... }
 
-      if (horaBOG >= 2 && horaBOG < 5) {
+      if (horaBOG >= 1 && horaBOG < 5) {
         await this.enviarMensajeTexto(
           numero,
           [
