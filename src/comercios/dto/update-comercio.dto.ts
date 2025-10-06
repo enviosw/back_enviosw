@@ -1,12 +1,19 @@
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateComercioDto } from './create-comercio.dto';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class UpdateComercioDto extends PartialType(CreateComercioDto) {
-
-
-      // Campo para el estado de comercio (abierto o cerrado)
   @IsOptional()
   @IsBoolean()
-  estado_comercio?: boolean; // true = abierto, false = cerrado
+  estado_comercio?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === '' || value === undefined) return null;
+    const n = Number(value);
+    return Number.isNaN(n) ? value : n;
+  })
+  @IsInt()
+  zonaId?: number | null;
 }

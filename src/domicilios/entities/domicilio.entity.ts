@@ -43,7 +43,6 @@ export class Domicilio {
   @Column({ name: 'id_cliente', type: 'int', nullable: true })
   id_cliente: number | null;
 
-
   @Column({ length: 30 })
   tipo_servicio: string;
 

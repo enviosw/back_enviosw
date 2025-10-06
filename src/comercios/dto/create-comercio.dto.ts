@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   IsString,
   IsEmail,
@@ -6,6 +7,7 @@ import {
   IsNotEmpty,
   IsBoolean,
   IsObject,
+  IsInt,
 } from 'class-validator';
 
 export class CreateComercioDto {
@@ -64,4 +66,15 @@ export class CreateComercioDto {
   @IsOptional()
   @IsBoolean()
   estado_comercio?: boolean; // true = abierto, false = cerrado
+
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === '' || value === undefined) return null;
+    const n = Number(value);
+    return Number.isNaN(n) ? value : n;
+  })
+  @IsInt()
+  zonaId?: number | null;
+
 }

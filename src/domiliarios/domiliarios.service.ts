@@ -21,7 +21,7 @@ export class DomiciliariosService {
   ) { }
 
   // 🚀 Asignar el próximo domiciliario disponible
-async asignarDomiciliarioDisponible(): Promise<Domiciliario> {
+  async asignarDomiciliarioDisponible(): Promise<Domiciliario> {
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(Domiciliario);
 
@@ -57,80 +57,128 @@ async asignarDomiciliarioDisponible(): Promise<Domiciliario> {
   }
 
 
+  async asignarDomiciliarioDisponible3(zonaId: number): Promise<Domiciliario> {
+console.log(`Asignando domiciliario en zona ${zonaId}`);
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Domiciliario);
 
-// ✅ Toma el siguiente disponible SIN mover turno_orden,
-async asignarDomiciliarioDisponible2(): Promise<Domiciliario> {
-  return this.dataSource.transaction(async (manager) => {
-    const repo = manager.getRepository(Domiciliario);
-
-    // Toma el primero por turno, pero NO cambia su turno_orden
-    const domi = await repo
-      .createQueryBuilder('d')
-      .where('d.estado = :activo AND d.disponible = :disp', { activo: true, disp: true })
-      .orderBy('d.turno_orden', 'ASC')
-      .addOrderBy('d.id', 'ASC')
-      .setLock('pessimistic_write')
-      .getOne();
-
-    if (!domi) {
-      throw new NotFoundException('No hay domiciliarios disponibles en este momento.');
-    }
-
-    // Solo lo pone como NO disponible (no mueve el turno)
-    await repo
-      .createQueryBuilder()
-      .update(Domiciliario)
-      .set({ disponible: false })
-      .where('id = :id AND disponible = true AND estado = true', { id: domi.id })
-      .execute();
-
-    const actualizado = await repo.findOne({ where: { id: domi.id } });
-    if (!actualizado) {
-      throw new NotFoundException('No fue posible actualizar el domiciliario seleccionado.');
-    }
-    return actualizado;
-  });
-}
-
-
-
-async liberarDomiciliario(id: number, moverAlFinal = false): Promise<void> {
-  await this.domiciliarioRepo.manager.transaction(async (manager) => {
-    const repo = manager.getRepository(Domiciliario);
-
-    // Lock pesimista para evitar carreras al liberar/asignar
-    const domi = await repo
-      .createQueryBuilder('d')
-      .where('d.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOne();
-
-    if (!domi) {
-      throw new NotFoundException(`No se encontró el domiciliario con ID ${id}`);
-    }
-
-    // Armar el update: por defecto solo disponible=true
-    const update: Partial<Domiciliario> = { disponible: true };
-
-    // (Opcional) Mover su turno al final de la cola
-    if (moverAlFinal) {
-      const result = await repo
+      // 1) Buscar el siguiente disponible EN ESA ZONA
+      const domi = await repo
         .createQueryBuilder('d')
-        .select('MAX(d.turno_orden)', 'max')
-        .getRawOne<{ max: number | null }>(); // puede ser undefined
+        .where('d.estado = :activo', { activo: true })
+        .andWhere('d.disponible = :disp', { disp: true })
+        .andWhere('d.zona_id = :zonaId', { zonaId }) // 👈 misma zona
+        .orderBy('d.turno_orden', 'ASC')
+        .addOrderBy('d.id', 'ASC')
+        .setLock('pessimistic_write')
+        .getOne();
 
-      const maxTurno = result?.max ?? 0;
-      update.turno_orden = maxTurno + 1;
-    }
+      if (!domi) {
+        throw new NotFoundException(
+          `No hay domiciliarios disponibles en la zona #${zonaId} en este momento.`,
+        );
+      }
 
-    await repo
-      .createQueryBuilder()
-      .update(Domiciliario)
-      .set(update)
-      .where('id = :id', { id })
-      .execute();
-  });
-}
+      // 2) Marcarlo como NO disponible (sin mover turno)
+      const res = await repo
+        .createQueryBuilder()
+        .update(Domiciliario)
+        .set({ disponible: false })
+        .where('id = :id', { id: domi.id })
+        .andWhere('disponible = true')
+        .andWhere('estado = true')
+        .andWhere('zona_id = :zonaId', { zonaId }) // 👈 asegura misma zona en el update
+        .execute();
+
+      if (!res.affected) {
+        throw new NotFoundException(
+          'No fue posible actualizar el domiciliario seleccionado (ya no estaba disponible).',
+        );
+      }
+
+      // 3) Devolver el registro actualizado
+      const actualizado = await repo.findOne({ where: { id: domi.id } });
+      if (!actualizado) {
+        throw new NotFoundException('No fue posible cargar el domiciliario actualizado.');
+      }
+
+      return actualizado;
+    });
+  }
+
+  // ✅ Toma el siguiente disponible SIN mover turno_orden,
+  async asignarDomiciliarioDisponible2(): Promise<Domiciliario> {
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Domiciliario);
+
+      // Toma el primero por turno, pero NO cambia su turno_orden
+      const domi = await repo
+        .createQueryBuilder('d')
+        .where('d.estado = :activo AND d.disponible = :disp', { activo: true, disp: true })
+        .orderBy('d.turno_orden', 'ASC')
+        .addOrderBy('d.id', 'ASC')
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!domi) {
+        throw new NotFoundException('No hay domiciliarios disponibles en este momento.');
+      }
+
+      // Solo lo pone como NO disponible (no mueve el turno)
+      await repo
+        .createQueryBuilder()
+        .update(Domiciliario)
+        .set({ disponible: false })
+        .where('id = :id AND disponible = true AND estado = true', { id: domi.id })
+        .execute();
+
+      const actualizado = await repo.findOne({ where: { id: domi.id } });
+      if (!actualizado) {
+        throw new NotFoundException('No fue posible actualizar el domiciliario seleccionado.');
+      }
+      return actualizado;
+    });
+  }
+
+
+
+  async liberarDomiciliario(id: number, moverAlFinal = false): Promise<void> {
+    await this.domiciliarioRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(Domiciliario);
+
+      // Lock pesimista para evitar carreras al liberar/asignar
+      const domi = await repo
+        .createQueryBuilder('d')
+        .where('d.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!domi) {
+        throw new NotFoundException(`No se encontró el domiciliario con ID ${id}`);
+      }
+
+      // Armar el update: por defecto solo disponible=true
+      const update: Partial<Domiciliario> = { disponible: true };
+
+      // (Opcional) Mover su turno al final de la cola
+      if (moverAlFinal) {
+        const result = await repo
+          .createQueryBuilder('d')
+          .select('MAX(d.turno_orden)', 'max')
+          .getRawOne<{ max: number | null }>(); // puede ser undefined
+
+        const maxTurno = result?.max ?? 0;
+        update.turno_orden = maxTurno + 1;
+      }
+
+      await repo
+        .createQueryBuilder()
+        .update(Domiciliario)
+        .set(update)
+        .where('id = :id', { id })
+        .execute();
+    });
+  }
 
   // 🔁 Reiniciar los turnos (opcional para limpiar el sistema)
   async reiniciarTurnos(): Promise<void> {
@@ -202,7 +250,8 @@ async liberarDomiciliario(id: number, moverAlFinal = false): Promise<void> {
 
 
   // ✅ Cambia el estado de disponibilidad por número de WhatsApp y actualiza turno
-  async cambiarDisponibilidadPorTelefono(telefono: string, disponible: boolean): Promise<void> {
+  async cambiarDisponibilidadPorTelefono(telefono: string, disponible: boolean, zonaId?: number | null, // <- opcional
+  ): Promise<void> {
     const domiciliario = await this.domiciliarioRepo.findOneBy({ telefono_whatsapp: telefono });
 
     if (!domiciliario) {
@@ -217,6 +266,12 @@ async liberarDomiciliario(id: number, moverAlFinal = false): Promise<void> {
 
     domiciliario.turno_orden = (max || 0) + 1;
     domiciliario.disponible = disponible;
+    // ✅ Solo tocar zona si el caller envía el parámetro
+    if (zonaId !== undefined) {
+      // puede ser number o null (para quitar la zona)
+      domiciliario.zona_id = zonaId;
+    }
+
 
     await this.domiciliarioRepo.save(domiciliario);
   }
@@ -258,34 +313,38 @@ async liberarDomiciliario(id: number, moverAlFinal = false): Promise<void> {
   }
 
   async verSiguienteDisponible(): Promise<Domiciliario | null> {
-  return this.domiciliarioRepo.findOne({
-    where: { estado: true, disponible: true },
-    order: { turno_orden: 'ASC', id: 'ASC' },
-  });
-}
-
-// domiciliarios.service.ts
-async getByTelefono(telefono: string): Promise<Domiciliario | null> {
-  return this.domiciliarioRepo.findOne({
-    where: { telefono_whatsapp: telefono },
-  });
-}
-
-
+    return this.domiciliarioRepo.findOne({
+      where: { estado: true, disponible: true },
+      order: { turno_orden: 'ASC', id: 'ASC' },
+    });
+  }
 
   // domiciliarios.service.ts
-async getEstadoPorTelefono(telefono: string): Promise<{ nombre: string; disponible: boolean; turno: number }> {
+  async getByTelefono(telefono: string): Promise<Domiciliario | null> {
+    return this.domiciliarioRepo.findOne({
+      where: { telefono_whatsapp: telefono },
+    });
+  }
+
+
+
+// domiciliarios.service.ts
+async getEstadoPorTelefono(
+  telefono: string,
+): Promise<{ nombre: string; disponible: boolean; turno: number; zona_id: number | null }> {
   const row = await this.domiciliarioRepo
     .createQueryBuilder('d')
     .select([
       'd.nombre AS nombre',
       'd.disponible AS disponible',
       'd.turno_orden AS turno',
+      'd.zona_id AS zona_id', // ✅ incluimos la zona
     ])
     .where('d.telefono_whatsapp = :tel', { tel: telefono })
-    .getRawOne<{ nombre: string; disponible: any; turno: any }>();
+    .getRawOne<{ nombre: string; disponible: any; turno: any; zona_id: any }>();
 
-    console.log(row)
+  console.log(row);
+
   if (!row) {
     throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
   }
@@ -294,27 +353,29 @@ async getEstadoPorTelefono(telefono: string): Promise<{ nombre: string; disponib
     nombre: row.nombre,
     disponible: Boolean(row.disponible),
     turno: Number(row.turno),
+    zona_id: row.zona_id !== null ? Number(row.zona_id) : null, // ✅ parsea null correctamente
   };
 }
 
-async setDisponibleManteniendoTurnoById(id: number, disponible = true): Promise<void> {
-  const domi = await this.domiciliarioRepo.findOneBy({ id });
-  if (!domi) {
-    throw new NotFoundException(`No se encontró domiciliario con ID ${id}`);
+
+  async setDisponibleManteniendoTurnoById(id: number, disponible = true): Promise<void> {
+    const domi = await this.domiciliarioRepo.findOneBy({ id });
+    if (!domi) {
+      throw new NotFoundException(`No se encontró domiciliario con ID ${id}`);
+    }
+    domi.disponible = disponible;
+    await this.domiciliarioRepo.save(domi); // 👈 persiste de verdad y dispara hooks
   }
-  domi.disponible = disponible;
-  await this.domiciliarioRepo.save(domi); // 👈 persiste de verdad y dispara hooks
-}
 
 
-// ✅ Dejar disponible SIN mover el turno (por teléfono)
-async setDisponibleManteniendoTurnoByTelefono(telefono: string, disponible = true): Promise<void> {
-  const domi = await this.domiciliarioRepo.findOne({ where: { telefono_whatsapp: telefono } });
-  if (!domi) {
-    throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
+  // ✅ Dejar disponible SIN mover el turno (por teléfono)
+  async setDisponibleManteniendoTurnoByTelefono(telefono: string, disponible = true): Promise<void> {
+    const domi = await this.domiciliarioRepo.findOne({ where: { telefono_whatsapp: telefono } });
+    if (!domi) {
+      throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
+    }
+    await this.domiciliarioRepo.update({ id: domi.id }, { disponible });
   }
-  await this.domiciliarioRepo.update({ id: domi.id }, { disponible });
-}
 
 
   // 🔥 Eliminar (hard delete) un domiciliario por ID
@@ -324,6 +385,40 @@ async setDisponibleManteniendoTurnoByTelefono(telefono: string, disponible = tru
       throw new NotFoundException(`No se encontró domiciliario con ID ${id}`);
     }
     await this.domiciliarioRepo.delete(id);
+  }
+
+
+    async actualizarZonaPorTelefono(telefono: string, zonaId: number | null): Promise<Domiciliario> {
+    if (zonaId !== null && Number.isNaN(Number(zonaId))) {
+      throw new ConflictException('El zonaId debe ser un número o null.');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Domiciliario);
+
+      const domi = await repo
+        .createQueryBuilder('d')
+        .where('d.telefono_whatsapp = :tel', { tel: telefono })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!domi) {
+        throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
+      }
+
+      await repo
+        .createQueryBuilder()
+        .update(Domiciliario)
+        .set({ zona_id: zonaId })
+        .where('id = :id', { id: domi.id })
+        .execute();
+
+      const actualizado = await repo.findOne({ where: { id: domi.id } });
+      if (!actualizado) {
+        throw new NotFoundException('No fue posible cargar el domiciliario actualizado.');
+      }
+      return actualizado;
+    });
   }
 
 }

@@ -5,6 +5,7 @@ import { Comercio } from './entities/comercio.entity';
 import { CreateComercioDto } from './dto/create-comercio.dto';
 import { UpdateComercioDto } from './dto/update-comercio.dto';
 import { ComercioQuery } from './interfaces/comercio.interface';
+import { Zona } from 'src/zonas/entities/zona.entity';
 
 @Injectable()
 export class ComerciosService {
@@ -24,10 +25,14 @@ export class ComerciosService {
     return await this.comercioRepo.save(comercio);
   }
 
-  
+
   // En ComerciosService
+// ComerciosService
 async getById(id: number) {
-  return this.comercioRepo.createQueryBuilder('c')
+  // si quieres seguir usando QB, trae la relación igual
+  return this.comercioRepo
+    .createQueryBuilder('c')
+    .leftJoinAndSelect('c.zona', 'zona') // ← trae la zona
     .select([
       'c.id',
       'c.nombre_comercial',
@@ -35,6 +40,8 @@ async getById(id: number) {
       'c.telefono',
       'c.telefono_secundario',
       'c.direccion',
+      'zona.id',       // ← id de la zona
+      'zona.nombre',   // (opcional) nombre de la zona
     ])
     .where('c.id = :id', { id })
     .getOne();
@@ -83,7 +90,8 @@ async getById(id: number) {
 
     const qb = this.comercioRepo
       .createQueryBuilder('comercio')
-      .leftJoinAndSelect('comercio.servicio', 'servicio'); // ⬅️ Aquí se une la relación
+      .leftJoinAndSelect('comercio.servicio', 'servicio') // ⬅️ Aquí se une la relación
+      .leftJoinAndSelect('comercio.zona', 'zona')
 
     if (query.search) {
       const palabras = query.search.trim().split(/\s+/);
@@ -142,21 +150,29 @@ async getById(id: number) {
     return comercio;
   }
 
-  // Actualizar un comercio
+  // comercios.service.ts
   async update(id: number, dto: UpdateComercioDto): Promise<Comercio> {
     const comercio = await this.comercioRepo.findOne({ where: { id } });
+    if (!comercio) throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
 
-    if (!comercio) {
-      throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+    // Asigna solamente propiedades válidas de la entidad
+    if (dto.nombre_comercial !== undefined) comercio.nombre_comercial = dto.nombre_comercial;
+    // ...otros campos
+
+    // SERVICIO (si tienes servicio_id como columna simple)
+    if (dto.servicio_id !== undefined) {
+      // si tu entidad tiene servicio_id simple:
+      // comercio.servicio_id = dto.servicio_id;
+      // (si tienes relación ManyToOne, usa la variante A)
     }
 
-    Object.assign(comercio, {
-      ...dto,
-      servicio: dto.servicio_id ? { id: dto.servicio_id } : comercio.servicio,
-    });
+    if (dto.zonaId !== undefined) {
+      comercio.zona = dto.zonaId === null ? null : ({ id: dto.zonaId } as Zona);
+    }
 
-    return await this.comercioRepo.save(comercio);
+    return this.comercioRepo.save(comercio);
   }
+
 
   // Eliminar un comercio
   async remove(id: number): Promise<void> {
@@ -202,12 +218,12 @@ async getById(id: number) {
     }
 
     // Obtener IDs aleatorios
-  const idsResult = await subQb
-    .orderBy('comercio.clicks', 'DESC')          // 1er criterio
-    .addOrderBy('comercio.fecha_creacion', 'DESC') // 2do criterio
-    .offset(skip)
-    .limit(take)
-    .getRawMany();
+    const idsResult = await subQb
+      .orderBy('comercio.clicks', 'DESC')          // 1er criterio
+      .addOrderBy('comercio.fecha_creacion', 'DESC') // 2do criterio
+      .offset(skip)
+      .limit(take)
+      .getRawMany();
 
 
     const ids = idsResult.map((row) => row.id);
@@ -298,10 +314,25 @@ async getById(id: number) {
   }
 
 
-async findByTelefono(telefono: string): Promise<{ id: number; nombre: string; telefono: string; direccion: string }> {
+async findByTelefono(telefono: string): Promise<{
+  id: number;
+  nombre: string;
+  telefono: string;
+  direccion: string;
+  zonaId: number | null;
+  zonaNombre: string | null;
+}> {
   const comercio = await this.comercioRepo
     .createQueryBuilder('comercio')
-    .select(['comercio.id', 'comercio.nombre_comercial', 'comercio.telefono', 'comercio.direccion'])
+    .leftJoin('comercio.zona', 'zona') // 👈 une la relación
+    .select([
+      'comercio.id',
+      'comercio.nombre_comercial',
+      'comercio.telefono',
+      'comercio.direccion',
+      'zona.id',
+      'zona.nombre',
+    ])
     .where('TRIM(comercio.telefono) = :telefono', { telefono })
     .getOne();
 
@@ -314,10 +345,10 @@ async findByTelefono(telefono: string): Promise<{ id: number; nombre: string; te
     nombre: comercio.nombre_comercial,
     telefono: comercio.telefono,
     direccion: comercio.direccion,
+    zonaId: comercio.zona ? (comercio.zona as any).id ?? null : null,
+    zonaNombre: comercio.zona ? (comercio.zona as any).nombre ?? null : null,
   };
 }
-
-
 
   async aumentarCLicks(id: number): Promise<void> {
     await this.comercioRepo.increment({ id }, 'clicks', 1)

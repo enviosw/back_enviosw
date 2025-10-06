@@ -48,4 +48,10 @@ export class Domiciliario {
 
   @UpdateDateColumn()
   fecha_actualizacion: Date;
+
+
+    // 👇 Campo simple (sin relación)
+  @Column({ name: 'zona_id', type: 'int', nullable: true })
+  zona_id: number | null;
+
 }

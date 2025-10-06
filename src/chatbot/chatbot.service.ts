@@ -43,6 +43,9 @@ const BTN_STICKER_CREAR_NO = 'sticker_crear_otro_no';
 
 const ESTADOS_ABIERTOS = [0, 5, 1]; // pendiente, ofertado, asignado
 
+// IDs para los botones de zona cuando elige "disponible"
+const BOTON_SET_ZONA_1_DISP = 'set_zona_1_disponible'; // Centro (id=1) + disponible=true
+const BOTON_SET_ZONA_2_DISP = 'set_zona_2_disponible'; // Solarte (id=2) + disponible=true
 
 const ASESOR_PSQR = '573142423130';
 
@@ -271,126 +274,149 @@ export class ChatbotService {
             continue;
           }
 
-          // 2) Intentar asignar un domi
-          const domiciliario: Domiciliario | null =
-            await this.domiciliarioService.asignarDomiciliarioDisponible2();
-
           // 3) Detectar tipo
           const tipo = String(pedido?.tipo_servicio || '').trim();
           const esSticker = tipo.toLowerCase() === 'sticker';
           const esCompras = tipo == "2"; // 👈 nuevo flag
+          const esAuto = tipo.toLowerCase() === 'auto'; // 👈 NUEVO
 
-          const esAuto    = tipo.toLowerCase() === 'auto'; // 👈 NUEVO
+          // ⬇️ NUEVO: si es STICKER, primero obtén zona del comercio (si hay id_cliente)
+          let zonaIdDeComercio: number | null = null;
+          if (esSticker && pedido.id_cliente) {
+            try {
+              const comercio = await this.comerciosService.getById(Number(pedido.id_cliente));
+              // Debes asegurarte que getById expone zona (c.zona_id o join a zona)
+              zonaIdDeComercio =
+                (typeof (comercio as any)?.zona?.id === 'number' ? (comercio as any).zona.id : undefined) ??
+                (typeof (comercio as any)?.zona_id === 'number' ? (comercio as any).zona_id : null);
+            } catch {
+              zonaIdDeComercio = null;
+            }
+          }
+
+          // 2) Intentar asignar un domi (con la info de zona si es sticker)
+          let domiciliario: Domiciliario | null = null;
+
+          if (esSticker) {
+            // ✅ Caso STICKER → asignar por zona si la hay
+            if (zonaIdDeComercio) {
+              this.logger.log(`Asignando domiciliario en zona ${zonaIdDeComercio}`);
+              try {
+                domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible3(Number(zonaIdDeComercio));
+              } catch (e) {
+                this.logger.warn(`⚠️ Sin domiciliarios en zona ${zonaIdDeComercio} para sticker id=${pedido.id}.`);
+                domiciliario = null;
+              }
+            } else {
+              this.logger.warn(`⚠️ Pedido ${pedido.id} sin zona de comercio. Se intentará asignar globalmente.`);
+              domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible2();
+            }
+          } else {
+            // ✅ Caso NO-STICKER → asignación global
+            domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible2();
+          }
 
           // ============================
-// 🚗 CASO AUTO: reenviar SOLO los detalles al domi
-// ============================
-if (esAuto) {
-  if (!domiciliario) {
-    this.logger.warn(`⚠️ Sin domiciliarios para pedido AUTO id=${pedido.id}.`);
-    await this.mostrarMenuPostConfirmacion(
-      pedido.numero_cliente,
-      pedido.id,
-      '🚨 En este momento no hay domiciliarios disponibles.\n\n' +
-      '⏳ Podemos reintentar en unos minutos, o puedes cancelar tu pedido.',
-      5 * 60 * 1000
-    );
-    await pausaSuave();
-    procesados++;
-    continue;
-  }
+          // 🚗 CASO AUTO: reenviar SOLO los detalles al domi
+          // ============================
+          if (esAuto) {
+            if (!domiciliario) {
+              this.logger.warn(`⚠️ Sin domiciliarios para pedido AUTO id=${pedido.id}.`);
+              await this.mostrarMenuPostConfirmacion(
+                pedido.numero_cliente,
+                pedido.id,
+                '🚨 En este momento no hay domiciliarios disponibles.\n\n' +
+                '⏳ Podemos reintentar en unos minutos, o puedes cancelar tu pedido.',
+                5 * 60 * 1000
+              );
+              await pausaSuave();
+              procesados++;
+              continue;
+            }
 
-  // Marcar ofertado atómico
-  const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
-    pedido.id,
-    domiciliario.id
-  );
-  if (!ofertado) {
-    try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch {}
-    this.logger.warn(`⛔ Race detectada: AUTO p=${pedido.id} ya no está pendiente.`);
-    await pausaSuave();
-    procesados++;
-    continue;
-  }
+            // Marcar ofertado atómico
+            const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(
+              pedido.id,
+              domiciliario.id
+            );
+            if (!ofertado) {
+              try { await this.domiciliarioService.liberarDomiciliario(domiciliario.id); } catch { }
+              this.logger.warn(`⛔ Race detectada: AUTO p=${pedido.id} ya no está pendiente.`);
+              await pausaSuave();
+              procesados++;
+              continue;
+            }
 
-  // 📝 Mensaje TAL CUAL del cliente (desde la página)
-  // Ejemplo:
-  // ¡Hola! Quiero coordinar una recogida y entrega:
-  // Dirección de Recogida: RECOGIDA 1
-  // Teléfono de Recogida: 3124657890
-  // Dirección de Entrega: CALLE 123
-  // Teléfono de Entrega: 3125430976
-// 📝 Mensaje TAL CUAL del cliente (desde la página)
-const detallePlano = (pedido.detalles_pedido ?? '').toString().trim();
+            const detallePlano = (pedido.detalles_pedido ?? '').toString().trim();
+            const mensajeAuto = [
+              '📦 *Nuevo pedido asignado*',
+              '',
+              '🧩 *Tipo:* Pedido desde la página (AUTO)',
+              '',
+              '📝 *Detalles:*',
+              detallePlano || '(sin detalle)',
+            ].join('\n');
 
-// Encabezado + tipo + detalles, con saltos de línea entre frases
-const mensajeAuto = [
-  '📦 *Nuevo pedido asignado*',
-  '',
-  '🧩 *Tipo:* Pedido desde la página (AUTO)',
-  '',
-  '📝 *Detalles:*',
-  detallePlano || '(sin detalle)',
-].join('\n');
+            const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // límite seguro
 
-const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // límite seguro
+            // Enviar OFERTA al domi con botones (sin encabezados extras)
+            try {
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: domiciliario.telefono_whatsapp,
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: bodySoloDetalles },
+                  action: {
+                    buttons: [
+                      { type: 'reply', reply: { id: `ACEPTAR_${pedido.id}`, title: '✅ Aceptar' } },
+                      { type: 'reply', reply: { id: `RECHAZAR_${pedido.id}`, title: '❌ Rechazar' } },
+                    ],
+                  },
+                },
+              }, { timeout: 7000 });
+            } catch (e: any) {
+              this.logger.warn(
+                `⚠️ Falló oferta AUTO al domi ${domiciliario.telefono_whatsapp} p=${pedido.id}: ` +
+                (e?.response?.data?.error?.message || e?.message || e)
+              );
+            }
 
-  // Enviar OFERTA al domi con botones (sin encabezados extras)
-  try {
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: domiciliario.telefono_whatsapp,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: bodySoloDetalles },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: `ACEPTAR_${pedido.id}`,  title: '✅ Aceptar'  } },
-            { type: 'reply', reply: { id: `RECHAZAR_${pedido.id}`, title: '❌ Rechazar' } },
-          ],
-        },
-      },
-    }, { timeout: 7000 });
-  } catch (e: any) {
-    this.logger.warn(
-      `⚠️ Falló oferta AUTO al domi ${domiciliario.telefono_whatsapp} p=${pedido.id}: ` +
-      (e?.response?.data?.error?.message || e?.message || e)
-    );
-  }
+            // Registrar oferta + timeout de expiración
+            ofertasVigentes.set(pedido.id, {
+              expira: Date.now() + OFERTA_TIMEOUT_MS,
+              domi: this.toTelKey(domiciliario.telefono_whatsapp),
+            });
 
-  // Registrar oferta + timeout de expiración
-  ofertasVigentes.set(pedido.id, {
-    expira: Date.now() + OFERTA_TIMEOUT_MS,
-    domi: this.toTelKey(domiciliario.telefono_whatsapp),
-  });
+            const prev = temporizadoresOferta.get(pedido.id);
+            if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedido.id); }
 
-  const prev = temporizadoresOferta.get(pedido.id);
-  if (prev) { clearTimeout(prev); temporizadoresOferta.delete(pedido.id); }
+            const to = setTimeout(async () => {
+              try {
+                const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedido.id);
+                if (volvio) {
+                  try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch { }
+                  this.logger.warn(`⏰ Domi no respondió. Pedido AUTO ${pedido.id} vuelve a pendiente.`);
+                  ofertasVigentes.delete(pedido.id);
+                }
+              } catch (e) {
+                this.logger.error(`Timeout oferta AUTO falló para pedido ${pedido.id}: ${e?.message || e}`);
+              } finally {
+                temporizadoresOferta.delete(pedido.id);
+              }
+            }, OFERTA_TIMEOUT_MS);
 
-  const to = setTimeout(async () => {
-    try {
-      const volvio = await this.domiciliosService.volverAPendienteSiOfertado(pedido.id);
-      if (volvio) {
-        try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch {}
-        this.logger.warn(`⏰ Domi no respondió. Pedido AUTO ${pedido.id} vuelve a pendiente.`);
-        ofertasVigentes.delete(pedido.id);
-      }
-    } catch (e) {
-      this.logger.error(`Timeout oferta AUTO falló para pedido ${pedido.id}: ${e?.message || e}`);
-    } finally {
-      temporizadoresOferta.delete(pedido.id);
-    }
-  }, OFERTA_TIMEOUT_MS);
+            temporizadoresOferta.set(pedido.id, to);
 
-  temporizadoresOferta.set(pedido.id, to);
+            await pausaSuave();
+            procesados++;
+            continue; // ⬅️ listo AUTO, siguiente pedido
+          }
 
-  await pausaSuave();
-  procesados++;
-  continue; // ⬅️ listo AUTO, siguiente pedido
-}
-
-
+          // ============================
+          // 🛒 CASO COMPRAS (tu flujo actual)
+          // ============================
           if (esCompras) {
             if (!domiciliario) {
               this.logger.warn(`⚠️ Sin domiciliarios para compras id=${pedido.id}.`);
@@ -419,7 +445,6 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
               continue;
             }
 
-            // 📝 MENSAJE TAL CUAL DEL CLIENTE
             const detalleCliente = (pedido.detalles_pedido ?? '').toString().trim() || '(sin detalle)';
             const resumenLargo = this.sanitizeWaBody(
               [
@@ -486,7 +511,7 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
           }
 
           // ============================
-          // ✅ CASO STICKER (nuevo flujo)
+          // ✅ CASO STICKER (nuevo flujo por zona)
           // ============================
           if (esSticker) {
             // Rehidratación por id_cliente (nombre, origen, tel)
@@ -575,7 +600,11 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
             }
 
             // 0 → 1 (asignado) atómico SIN oferta
-            const asignado = await this.domiciliosService.asignarSiPendiente(pedido.id, domiciliario.id);
+            const asignado = await this.domiciliosService.asignarSiPendiente(
+              pedido.id,
+              domiciliario.id,
+              // 👇 pasa la zona si la tienes; tu método la valida condicionalmente
+            );
             if (!asignado) {
               try { await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiciliario.id, true); } catch { }
               this.logger.warn(`⛔ Race: sticker p=${pedido.id} ya no está pendiente al asignar.`);
@@ -807,6 +836,7 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
       LAST_RETRY_AT = Date.now();
     }
   }
+
 
 
 
@@ -1329,23 +1359,21 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
       }, ESTADO_COOLDOWN_MS);
       temporizadoresEstado.set(numero, t);
 
-      // 1) Obtener estado (solo esto en try/catch)
-      let disponible: boolean, turno: number, nombreDomi: string;
+      let disponible: boolean, turno: number, nombreDomi: string, zonaId: number | null;
+
       try {
         const res = await this.domiciliarioService.getEstadoPorTelefono(numero);
         disponible = res.disponible;
         turno = res.turno;
         nombreDomi = res.nombre;
-      } catch (e) {
+        zonaId = res.zona_id; // ✅ coincide el tipo
+      } catch (e: any) {
         this.logger.warn(`⚠️ No se pudo obtener estado actual para ${numero}: ${e?.message || e}`);
         await this.enviarMensajeTexto(numero, '❌ No encontré tu perfil como domiciliario.');
-
-        // NEW: ante error, libera el candado para permitir reintento manual inmediato
         const s = estadoUsuarios.get(numero) || {};
         s.awaitingEstado = false;
         s.awaitingEstadoExpiresAt = undefined;
         estadoUsuarios.set(numero, s);
-
         if (temporizadoresEstado.has(numero)) {
           clearTimeout(temporizadoresEstado.get(numero)!);
           temporizadoresEstado.delete(numero);
@@ -1358,14 +1386,33 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
       const nextLbl = disponible ? '🛑 No disponible' : '✅ Disponible'; // <= 20 chars
       const keepLbl = '↩️ Mantener'; // <= 20 chars
 
+      // Texto legible de zona
+      const zonaTxt =
+        zonaId === 1 ? '🏙️ Zona Centro' :
+          zonaId === 2 ? '🌄 Zona Solarte' :
+            (zonaId == null ? 'Sin zona' : `ID ${zonaId}`);
+
       try {
         await this.enviarMensajeTexto(
           numero,
           `👋 Hola ${nombreDomi || ''}\n` +
           `Tu *estado actual* es: ${estadoTxt}\n` +
           `🔢 Tu turno actual es: *${turno}*\n\n` +
+          `📍 Tu zona actual es: *${zonaTxt}*\n\n` +
           `¿Deseas cambiar tu estado?`
         );
+
+        // 👇 Botones condicionados por disponibilidad
+        const buttons = disponible
+          ? [
+            { type: 'reply', reply: { id: nextId, title: nextLbl } },
+            { type: 'reply', reply: { id: 'mantener_estado', title: keepLbl } },
+            { type: 'reply', reply: { id: 'cambiar_zona', title: 'Cambiar zona' } }, // solo si DISPONIBLE
+          ]
+          : [
+            { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+            { type: 'reply', reply: { id: 'mantener_estado', title: keepLbl } },
+          ];
 
         await axiosWhatsapp.post('/messages', {
           messaging_product: 'whatsapp',
@@ -1374,18 +1421,13 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
           interactive: {
             type: 'button',
             body: { text: 'Elige una opción:' },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: nextId, title: nextLbl } },
-                { type: 'reply', reply: { id: 'mantener_estado', title: keepLbl } },
-              ],
-            },
+            action: { buttons },
           },
         });
-      } catch (e) {
+      } catch (e: any) {
         this.logger.warn(`⚠️ Falló el envío de botones a ${numero}: ${e?.response?.data?.error?.message || e?.message || e}`);
 
-        // NEW: si el envío falló, no tiene sentido mantener bloqueado; libera para reintento
+        // Liberar guardas si falló
         const s = estadoUsuarios.get(numero) || {};
         s.awaitingEstado = false;
         s.awaitingEstadoExpiresAt = undefined;
@@ -1397,6 +1439,7 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
         }
       }
       return;
+
     }
 
 
@@ -1739,6 +1782,51 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
 
     if (mensaje?.interactive?.type === 'button_reply') {
       const id = mensaje.interactive.button_reply.id;
+
+
+      // ===== CAMBIAR ZONA (mostrar 2 botones) =====
+      if (id === 'cambiar_zona') {
+        try {
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: mensaje.from, // usa el mismo formato que guardas en BD
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: '📍 ¿En qué zona te encuentras?' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: 'set_zona_1', title: '🏙️ Zona Centro' } },  // zona_id = 1
+                  { type: 'reply', reply: { id: 'set_zona_2', title: '🌄 Zona Solarte' } }, // zona_id = 2
+                ],
+              },
+            },
+          });
+        } catch (error: any) {
+          this.logger?.warn?.(`⚠️ Error al enviar botones de zona: ${error?.message || error}`);
+          await this.enviarMensajeTexto(mensaje.from, '❌ No se pudieron mostrar las zonas. Intenta de nuevo.');
+        }
+        return; // ¡no sigas con otros handlers!
+      }
+
+      // ===== SET ZONA (solo cambia la zona, NO toca disponibilidad) =====
+      if (id === 'set_zona_1' || id === 'set_zona_2') {
+        const zonaId = id === 'set_zona_1' ? 1 : 2;
+        try {
+          await this.domiciliarioService.actualizarZonaPorTelefono(mensaje.from, zonaId);
+          const nombreZona = zonaId === 1 ? '🏙️ Zona Centro' : '🌄 Zona Solarte';
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: mensaje.from,
+            type: 'text',
+            text: { body: `✔️ Zona actualizada: ${nombreZona}.` },
+          });
+        } catch (error: any) {
+          this.logger?.warn?.(`⚠️ Error al actualizar zona: ${error?.message || error}`);
+          await this.enviarMensajeTexto(mensaje.from, '❌ No se pudo actualizar tu zona. Intenta de nuevo.');
+        }
+        return; // corta aquí también
+      }
 
 
       // ——— CANCELACIÓN INMEDIATA (info|compra|pago) ———
@@ -2651,41 +2739,52 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
 
       if (id === 'cambiar_a_disponible' || id === 'cambiar_a_no_disponible') {
         const disponible = id === 'cambiar_a_disponible';
-        try {
-          await this.domiciliarioService.cambiarDisponibilidadPorTelefono(numero, disponible);
 
-          const s = estadoUsuarios.get(numero) || {};
-          s.awaitingEstado = false;
-          s.awaitingEstadoExpiresAt = undefined;
-          estadoUsuarios.set(numero, s);
+        if (!disponible) {
+          // 🛑 Si es NO DISPONIBLE, actualizar de una vez
+          try {
+            await this.domiciliarioService.cambiarDisponibilidadPorTelefono(numero, false);
 
-          if (temporizadoresEstado.has(numero)) {
-            clearTimeout(temporizadoresEstado.get(numero)!);
-            temporizadoresEstado.delete(numero);
+            await this.enviarMensajeTexto(numero, '✅ Estado actualizado. Ahora estás *NO DISPONIBLE*.');
+            await this.enviarMensajeTexto(numero, '👋 Escríbeme cuando quieras volver a estar disponible.');
+          } catch (error) {
+            this.logger.warn(`⚠️ Error al cambiar a NO DISPONIBLE: ${error?.message || error}`);
+            await this.enviarMensajeTexto(numero, '❌ No se pudo actualizar tu estado. Intenta de nuevo.');
           }
-
-          await this.enviarMensajeTexto(
-            numero,
-            `✅ Estado actualizado. Ahora estás como *${disponible ? 'DISPONIBLE' : 'NO DISPONIBLE'}*.`
-          );
-          await this.enviarMensajeTexto(numero, '👋 Escribeme si necesitas consultar o actualizar tu estado.');
-        } catch (error) {
-          this.logger.warn(`⚠️ Error al cambiar disponibilidad: ${error?.message || error}`);
-
-          const s = estadoUsuarios.get(numero) || {};
-          s.awaitingEstado = false;
-          s.awaitingEstadoExpiresAt = undefined;
-          estadoUsuarios.set(numero, s);
-
-          if (temporizadoresEstado.has(numero)) {
-            clearTimeout(temporizadoresEstado.get(numero)!);
-            temporizadoresEstado.delete(numero);
-          }
-
-          await this.enviarMensajeTexto(numero, '❌ No se pudo actualizar tu estado.');
+          return;
         }
+
+        // ✅ Si es DISPONIBLE, pedir zona con botones manuales (axiosWhatsapp)
+        try {
+          await axiosWhatsapp.post('/messages', {
+            messaging_product: 'whatsapp',
+            to: numero,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: '📍 ¿En qué zona te encuentras?' },
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'set_zona_1_disponible', title: '🏙️ Zona Centro' }, // zona_id = 1
+                  },
+                  {
+                    type: 'reply',
+                    reply: { id: 'set_zona_2_disponible', title: '🌄 Zona Solarte' }, // zona_id = 2
+                  },
+                ],
+              },
+            },
+          });
+        } catch (error) {
+          this.logger.warn(`⚠️ Error al enviar botones de zona: ${error?.message || error}`);
+          await this.enviarMensajeTexto(numero, '❌ No se pudieron mostrar las zonas. Intenta de nuevo.');
+        }
+
         return;
       }
+
 
       // =========================
       // Confirmaciones de pedido del cliente
@@ -3002,6 +3101,39 @@ const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // lí
         }
       }
 
+
+
+      if (id === 'set_zona_1_disponible' || id === 'set_zona_2_disponible') {
+        // ✅ Determina zona según el id del botón
+        const zonaId = id === 'set_zona_1_disponible' ? 1 : 2;
+
+        try {
+          // ✅ Llamada al servicio con el nuevo parámetro zonaId
+          await this.domiciliarioService.cambiarDisponibilidadPorTelefono(
+            numero,   // teléfono del domiciliario
+            true,     // disponible = true
+            zonaId,   // 🔹 pasa el ID de la zona (1 o 2)
+          );
+
+          // ✅ Mensajes de confirmación
+          await this.enviarMensajeTexto(
+            numero,
+            `✅ Estado actualizado. Ahora estás *DISPONIBLE* en *${zonaId === 1 ? 'Zona Centro' : 'Zona Solarte'}*.`
+          );
+          await this.enviarMensajeTexto(
+            numero,
+            '👋 Si necesitas, vuelve a consultar o actualizar tu estado.'
+          );
+        } catch (error) {
+          this.logger.warn(`⚠️ Error al actualizar disponibilidad/zona: ${error?.message || error}`);
+          await this.enviarMensajeTexto(
+            numero,
+            '❌ No se pudo actualizar tu estado/zona. Intenta de nuevo.'
+          );
+        }
+
+        return;
+      }
 
 
 
@@ -4525,34 +4657,53 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
     };
 
     // Snapshot de comercio sin placeholders; intenta completar por id y por teléfono del sticker
+    // cambia la firma para incluir zonaId
     const resolveComercioSnapshot = async (input: any, telSticker: string): Promise<{
       id?: number;
       nombre: string | null;
       telefono: string | null;
       direccion: string | null;
+      zonaId?: number | null;  // 👈 nuevo
     }> => {
       const init = input ?? {};
+
+      // lee zona tanto si viene relación como si viene columna simple
+      const zonaIdInit: number | null | undefined =
+        (typeof init?.zona?.id === 'number' ? init.zona.id : undefined) ??
+        (typeof init?.zona_id === 'number' ? init.zona_id : undefined) ??
+        (typeof init?.zonaId === 'number' ? init.zonaId : undefined); // por si vino plana
+
       let id: number | undefined = init?.id;
       let nombre: string | null = firstNonEmpty(init?.nombre, init?.nombre_comercial, init?.name, init?.razon_social);
       let telefono: string | null = firstNonEmpty(init?.telefono, init?.telefono_whatsapp, init?.celular, init?.tel, init?.phone);
       let direccion: string | null = firstNonEmpty(init?.direccion, init?.direccion_principal, init?.address);
+      let zonaId: number | null | undefined = zonaIdInit;
 
       if (telefono) telefono = toTelKeyLocal(telefono);
 
-      if (id && (!nombre || !telefono || !direccion)) {
+      // completa por ID si vino incompleto
+      if (id && (!nombre || !telefono || !direccion || zonaId === undefined)) {
         try {
-          const rec = (await (this.comerciosService as any)?.getById?.(id))
-            ?? (await (this.comerciosService as any)?.findOne?.(id));
+          const rec =
+            (await (this.comerciosService as any)?.getById?.(id)) ??
+            (await (this.comerciosService as any)?.findOne?.(id));
           if (rec) {
             nombre = nombre ?? firstNonEmpty(rec?.nombre, rec?.nombre_comercial, rec?.name, rec?.razon_social);
             telefono = telefono ?? firstNonEmpty(rec?.telefono, rec?.telefono_whatsapp, rec?.celular, rec?.tel, rec?.phone);
             direccion = direccion ?? firstNonEmpty(rec?.direccion, rec?.direccion_principal, rec?.address);
+            // 👇 toma zona desde relación o columna simple, según tu modelo
+            if (zonaId === undefined) {
+              zonaId =
+                (typeof rec?.zona?.id === 'number' ? rec.zona.id : undefined) ??
+                (typeof rec?.zona_id === 'number' ? rec.zona_id : null);
+            }
             if (telefono) telefono = toTelKeyLocal(telefono);
           }
         } catch { }
       }
 
-      if (!nombre || !telefono || !direccion) {
+      // completa por teléfono si aún falta algo
+      if (!nombre || !telefono || !direccion || zonaId === undefined) {
         try {
           const telKeySticker = toTelKeyLocal(telSticker);
           const recByTel =
@@ -4561,21 +4712,29 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
             (await (this.comerciosService as any)?.getByWhatsapp?.(telKeySticker));
 
           if (recByTel) {
-            id = id ?? recByTel.id; // 👈 ahora sí lo tendrás
-            nombre = nombre ?? firstNonEmpty(
-              recByTel?.nombre, recByTel?.nombre_comercial, recByTel?.name, recByTel?.razon_social
-            );
-            telefono = telefono ?? firstNonEmpty(
-              recByTel?.telefono, recByTel?.telefono_whatsapp, recByTel?.celular, recByTel?.tel, recByTel?.phone
-            );
+            id = id ?? recByTel.id;
+            nombre = nombre ?? firstNonEmpty(recByTel?.nombre, recByTel?.nombre_comercial, recByTel?.name, recByTel?.razon_social);
+            telefono = telefono ?? firstNonEmpty(recByTel?.telefono, recByTel?.telefono_whatsapp, recByTel?.celular, recByTel?.tel, recByTel?.phone);
             direccion = direccion ?? firstNonEmpty(recByTel?.direccion, recByTel?.direccion_principal, recByTel?.address);
+            if (zonaId === undefined) {
+              zonaId =
+                (typeof recByTel?.zona?.id === 'number' ? recByTel.zona.id : undefined) ??
+                (typeof recByTel?.zona_id === 'number' ? recByTel.zona_id : null);
+            }
             if (telefono) telefono = toTelKeyLocal(telefono);
           }
         } catch { }
       }
 
-      return { id, nombre: nombre ?? null, telefono: telefono ?? null, direccion: direccion ?? null };
+      return {
+        id,
+        nombre: nombre ?? null,
+        telefono: telefono ?? null,
+        direccion: direccion ?? null,
+        zonaId: typeof zonaId === 'number' ? zonaId : (zonaId === null ? null : undefined),
+      };
     };
+
     // ----------------------------------------------------------
 
     const telClienteNorm = normalizar(numeroWhatsApp); // comercio que envía el sticker
@@ -4692,7 +4851,16 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
     // ASIGNACIÓN DIRECTA (sticker) + CONVERSACIÓN
     // =========================
     let domiciliario: Domiciliario | null = null;
-    try { domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible2(); }
+
+    const zonaIdDeComercio: number | null | undefined =
+      (typeof cSnap?.zonaId === 'number' ? cSnap.zonaId : undefined) ??
+      (typeof comercio?.zona?.id === 'number' ? comercio.zona.id : undefined) ??
+      (typeof comercio?.zona_id === 'number' ? comercio.zona_id : undefined) ??
+      (typeof comercio?.zonaId === 'number' ? comercio.zonaId : undefined) ??
+      null;
+
+    console.log('📌 Pedido creado desde sticker, id:', comercio);
+    try { domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible3(Number(zonaIdDeComercio)); }
     catch { domiciliario = null; }
 
     // 2.a) Sin domi → queda pendiente + botón CANCELAR (y palabra)

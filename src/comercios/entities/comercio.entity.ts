@@ -13,6 +13,7 @@ import {
   ManyToMany,
 } from 'typeorm';
 import { Usuario } from '../../usuarios/entities/usuario.entity';
+import { Zona } from '../../zonas/entities/zona.entity';
 
 @Entity('comercios')
 export class Comercio {
@@ -40,7 +41,7 @@ export class Comercio {
   @Column({ length: 15 })
   telefono: string;
 
-    @Column({ type: 'bigint', default: 0 })
+  @Column({ type: 'bigint', default: 0 })
   clicks: string;
 
   @Column({ length: 15 })
@@ -107,4 +108,14 @@ export class Comercio {
   // Relación Muchos a Muchos con Usuario
   @OneToMany(() => Usuario, (usuario) => usuario.comercio)
   usuarios: Usuario[];
+
+
+  @ManyToOne(() => Zona, (zona) => zona.comercios, {
+    eager: true,             // opcional
+    nullable: true,          // ✅ permite null
+    onDelete: 'SET NULL',    // ✅ si se elimina la zona, el campo queda null
+  })
+  @JoinColumn({ name: 'zona_id' })
+  zona: Zona | null;
+
 }
