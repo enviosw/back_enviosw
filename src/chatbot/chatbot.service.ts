@@ -1173,12 +1173,11 @@ export class ChatbotService {
         }
       }
 
-      // 2) Mensaje de “procesando…”
+      // 1) Mensaje de "buscando domiciliario..."
       await this.enviarMensajeTexto(
         numero,
-        '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
+        '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
       );
-
       // 3) Botón CANCELAR con helper (incluye Ref:#, valida cancelable y respeta bloqueoMenu/TTL)
       if (pid) {
         await this.mostrarMenuPostConfirmacion(
@@ -1489,8 +1488,9 @@ export class ChatbotService {
           if (st.esperandoAsignacion && st.pedidoId && !st.conversacionId) {
             await this.enviarMensajeTexto(
               numero,
-              '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
+              '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
             );
+
 
             await this.mostrarMenuPostConfirmacion(
               numero,
@@ -1584,8 +1584,9 @@ export class ChatbotService {
         // Mensaje de “procesando”
         await this.enviarMensajeTexto(
           numero,
-          '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por tu paciencia y confianza.'
+          '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
         );
+
 
         // Muestra botón de cancelar si tenemos pedidoId y no hay conversación activa
         if (st?.pedidoId && !st?.conversacionId) {
@@ -2828,9 +2829,10 @@ export class ChatbotService {
           await showCancelar(
             st.pedidoId,
             st.esperandoAsignacion
-              ? '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+              ? '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
               : '⏳ Si ya no lo necesitas, puedes cancelar:'
           );
+
           return;
         }
 
@@ -2841,9 +2843,10 @@ export class ChatbotService {
             await showCancelar(
               st.pedidoId,
               st.esperandoAsignacion
-                ? '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+                ? '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
                 : '⏳ Si ya no lo necesitas, puedes cancelar:'
             );
+
           }
           return;
         }
@@ -2885,8 +2888,9 @@ export class ChatbotService {
           // ⛳️ Mostrar botón de cancelar INMEDIATO (apenas confirmó)
           await showCancelar(
             pedidoBase.id,
-            '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+            '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
           );
+
 
           // 1) Intentar asignar un domiciliario disponible (sin mover turno + cooldown)
           try {
@@ -3079,14 +3083,16 @@ export class ChatbotService {
                 estadoUsuarios.set(numero, st);
                 await showCancelar(
                   pedidoPendiente.id,
-                  '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+                  '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
                 );
+
               }
             } else {
               await showCancelar(
                 st.pedidoId,
-                '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.'
+                '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
               );
+
             }
           } catch (e) {
             this.logger.warn(`⚠️ Fallback crear/mostrar cancelar falló: ${e?.message || e}`);
@@ -4487,9 +4493,10 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       await this.mostrarMenuPostConfirmacion(
         telClienteNorm,
         pedidoId,
-        '⏳ Estamos procesando tu domicilio ✨🛵\n\n🙏 Gracias por confiar en *Domicilios W*.',
+        '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌',
         60 * 1000
       );
+
       try {
         await axiosWhatsapp.post('/messages', {
           messaging_product: 'whatsapp',
@@ -4545,8 +4552,9 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
     // 6) Avisar al cliente (todavía NO hay conversación)
     await this.enviarMensajeTexto(
       telClienteNorm,
-      '⏳ Estamos procesando tu domicilio. Gracias por preferirnos..'
+      '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
     );
+
 
     try {
       await axiosWhatsapp.post('/messages', {
