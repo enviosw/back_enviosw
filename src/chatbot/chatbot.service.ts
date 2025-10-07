@@ -874,6 +874,18 @@ export class ChatbotService {
     const nombre = value?.contacts?.[0]?.profile?.name ?? 'cliente';
 
 
+
+    // En la parte superior de procesarMensajeEntrante, justo después de definir const numero = mensaje?.from;
+    if (numero === this.numeroNotificaciones) {
+      await this.enviarMensajeTexto(numero, '👋 Hola Wilber');
+
+      await this.enviarSticker(numero, String(stickerConstants.stickerId))
+      // 🔥 Elimina la conversación del mapa en memoria
+      estadoUsuarios.delete(numero);
+      return; // Detiene aquí el flujo
+    }
+
+
     // ⏰ Bloque de horario: sin servicio 1:00–4:59 a.m. (hora Bogotá)
     try {
       // Hora actual en zona "America/Bogota"
