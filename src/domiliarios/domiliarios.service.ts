@@ -57,29 +57,46 @@ export class DomiciliariosService {
   }
 
 
-  async asignarDomiciliarioDisponible3(zonaId: number): Promise<Domiciliario> {
-console.log(`Asignando domiciliario en zona ${zonaId}`);
+  async asignarDomiciliarioDisponible3(zonaId: number): Promise<Domiciliario | null> {
+    console.log(`Asignando domiciliario en zona ${zonaId}`);
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(Domiciliario);
 
-      // 1) Buscar el siguiente disponible EN ESA ZONA
-      const domi = await repo
+      // ---- 1) Buscar en la zona solicitada ----
+      let domi = await repo
         .createQueryBuilder('d')
         .where('d.estado = :activo', { activo: true })
         .andWhere('d.disponible = :disp', { disp: true })
-        .andWhere('d.zona_id = :zonaId', { zonaId }) // 👈 misma zona
+        .andWhere('d.zona_id = :zonaId', { zonaId })
         .orderBy('d.turno_orden', 'ASC')
         .addOrderBy('d.id', 'ASC')
         .setLock('pessimistic_write')
         .getOne();
 
+      // ---- 2) Si no hay en esa zona, intentar en cualquier otra ----
+      let fueraDeZona = false;
       if (!domi) {
-        throw new NotFoundException(
-          `No hay domiciliarios disponibles en la zona #${zonaId} en este momento.`,
-        );
+        console.log(`No hay domiciliarios disponibles en zona ${zonaId}. Buscando en otras zonas...`);
+        domi = await repo
+          .createQueryBuilder('d')
+          .where('d.estado = :activo', { activo: true })
+          .andWhere('d.disponible = :disp', { disp: true })
+          .orderBy('d.turno_orden', 'ASC')
+          .addOrderBy('d.id', 'ASC')
+          .setLock('pessimistic_write')
+          .getOne();
+
+        if (domi) fueraDeZona = true;
       }
 
-      // 2) Marcarlo como NO disponible (sin mover turno)
+      // ---- 3) Si sigue sin haber nadie disponible, no hacer nada ----
+      if (!domi) {
+        console.log(`⚠️  No hay domiciliarios disponibles en ninguna zona.`);
+        // No lanzamos excepción: retornamos null para que el flujo superior decida qué hacer.
+        return null;
+      }
+
+      // ---- 4) Intentar marcarlo como no disponible ----
       const res = await repo
         .createQueryBuilder()
         .update(Domiciliario)
@@ -87,24 +104,32 @@ console.log(`Asignando domiciliario en zona ${zonaId}`);
         .where('id = :id', { id: domi.id })
         .andWhere('disponible = true')
         .andWhere('estado = true')
-        .andWhere('zona_id = :zonaId', { zonaId }) // 👈 asegura misma zona en el update
         .execute();
 
+      // ---- 5) Si no se pudo actualizar, abortar sin asignar ----
       if (!res.affected) {
-        throw new NotFoundException(
-          'No fue posible actualizar el domiciliario seleccionado (ya no estaba disponible).',
-        );
+        console.log(`⚠️  Domiciliario ${domi.id} ya no estaba disponible.`);
+        return null;
       }
 
-      // 3) Devolver el registro actualizado
+      // ---- 6) Devolver registro actualizado ----
       const actualizado = await repo.findOne({ where: { id: domi.id } });
       if (!actualizado) {
-        throw new NotFoundException('No fue posible cargar el domiciliario actualizado.');
+        console.log(`⚠️  No fue posible cargar el domiciliario actualizado.`);
+        return null;
+      }
+
+      if (fueraDeZona) {
+        console.log(
+          `Domiciliario ${actualizado.id} asignado FUERA de la zona solicitada (zona original ${zonaId}, asignada ${actualizado.zona_id}).`,
+        );
+        (actualizado as any).__fueraDeZona = true; // solo marcador temporal, no se guarda en BD
       }
 
       return actualizado;
     });
   }
+
 
   // ✅ Toma el siguiente disponible SIN mover turno_orden,
   async asignarDomiciliarioDisponible2(): Promise<Domiciliario> {
@@ -328,34 +353,34 @@ console.log(`Asignando domiciliario en zona ${zonaId}`);
 
 
 
-// domiciliarios.service.ts
-async getEstadoPorTelefono(
-  telefono: string,
-): Promise<{ nombre: string; disponible: boolean; turno: number; zona_id: number | null }> {
-  const row = await this.domiciliarioRepo
-    .createQueryBuilder('d')
-    .select([
-      'd.nombre AS nombre',
-      'd.disponible AS disponible',
-      'd.turno_orden AS turno',
-      'd.zona_id AS zona_id', // ✅ incluimos la zona
-    ])
-    .where('d.telefono_whatsapp = :tel', { tel: telefono })
-    .getRawOne<{ nombre: string; disponible: any; turno: any; zona_id: any }>();
+  // domiciliarios.service.ts
+  async getEstadoPorTelefono(
+    telefono: string,
+  ): Promise<{ nombre: string; disponible: boolean; turno: number; zona_id: number | null }> {
+    const row = await this.domiciliarioRepo
+      .createQueryBuilder('d')
+      .select([
+        'd.nombre AS nombre',
+        'd.disponible AS disponible',
+        'd.turno_orden AS turno',
+        'd.zona_id AS zona_id', // ✅ incluimos la zona
+      ])
+      .where('d.telefono_whatsapp = :tel', { tel: telefono })
+      .getRawOne<{ nombre: string; disponible: any; turno: any; zona_id: any }>();
 
-  console.log(row);
+    console.log(row);
 
-  if (!row) {
-    throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
+    if (!row) {
+      throw new NotFoundException(`No se encontró domiciliario con teléfono ${telefono}`);
+    }
+
+    return {
+      nombre: row.nombre,
+      disponible: Boolean(row.disponible),
+      turno: Number(row.turno),
+      zona_id: row.zona_id !== null ? Number(row.zona_id) : null, // ✅ parsea null correctamente
+    };
   }
-
-  return {
-    nombre: row.nombre,
-    disponible: Boolean(row.disponible),
-    turno: Number(row.turno),
-    zona_id: row.zona_id !== null ? Number(row.zona_id) : null, // ✅ parsea null correctamente
-  };
-}
 
 
   async setDisponibleManteniendoTurnoById(id: number, disponible = true): Promise<void> {
@@ -388,7 +413,7 @@ async getEstadoPorTelefono(
   }
 
 
-    async actualizarZonaPorTelefono(telefono: string, zonaId: number | null): Promise<Domiciliario> {
+  async actualizarZonaPorTelefono(telefono: string, zonaId: number | null): Promise<Domiciliario> {
     if (zonaId !== null && Number.isNaN(Number(zonaId))) {
       throw new ConflictException('El zonaId debe ser un número o null.');
     }
