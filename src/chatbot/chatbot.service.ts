@@ -232,6 +232,10 @@ export class ChatbotService {
       let procesados = 0;
 
       for (const pedido of pendientes) {
+
+        const numeroClienteFmt = telConMas(toTelKey(pedido.numero_cliente));
+
+
         if (procesados >= MAX_POR_CORRIDA) {
           this.logger.log(`⏸️ Límite por corrida alcanzado (${MAX_POR_CORRIDA}).`);
           break;
@@ -352,6 +356,8 @@ export class ChatbotService {
               '📦 *Nuevo pedido asignado*',
               '',
               '🧩 *Tipo:* Pedido desde la página (AUTO)',
+              `👤 *Número del cliente:* ${numeroClienteFmt}`, // 👈 AÑADIDO
+
               '',
               '📝 *Detalles:*',
               detallePlano || '(sin detalle)',
@@ -449,6 +455,8 @@ export class ChatbotService {
             const resumenLargo = this.sanitizeWaBody(
               [
                 '📦 *Nuevo pedido de COMPRAS disponible*',
+                `👤 *Número del cliente:* ${numeroClienteFmt}`, // 👈 AÑADIDO
+
                 '',
                 '📝 *Mensaje del cliente:*',
                 detalleCliente,
@@ -773,7 +781,9 @@ export class ChatbotService {
             .join('\n\n');
 
           const bodyTexto = this.sanitizeWaBody(
-            `📦 *Nuevo pedido disponible:*\n\n${resumenPedido}`
+            `📦 *Nuevo pedido disponible:*\n\n` +
+            `👤 *Número del cliente:* ${numeroClienteFmt}\n\n` + // 👈 AÑADIDO
+            `${resumenPedido}`
           );
 
           await pausaSuave();
@@ -2799,6 +2809,10 @@ export class ChatbotService {
       }
 
 
+      const numeroCliente =
+        (this as any).toTelKey ? (this as any).toTelKey(numero) : String(numero);
+
+
       // =========================
       // Confirmaciones de pedido del cliente
       // =========================
@@ -2922,7 +2936,7 @@ export class ChatbotService {
             }
 
             // Notificar al cliente (opcional) y mantener botón cancelar ya enviado
-            await this.enviarMensajeTexto(numero, '⏳ Estamos *procesando* tu pedido. Gracias por preferirnos');
+            // await this.enviarMensajeTexto(numero, '⏳ Estamos *procesando* tu pedido. Gracias por preferirnos');
 
             // ——— construir y ENVIAR la oferta al domi (sin helper) ———
             if (id === 'confirmar_compra' || tipo === '2') {
@@ -2933,6 +2947,8 @@ export class ChatbotService {
                   '📦 *Nuevo pedido disponible:*',
                   '',
                   `🔁 *Tipo de servicio:* ${String(tipo || 'servicio')}`,
+                  `👤 *Número del cliente:* ${numeroCliente}`,  // 👈 AÑADIDO AQUÍ
+
                   '',
                   '📝 *Detalle del cliente:*',
                   detalleCliente,
@@ -2965,6 +2981,8 @@ export class ChatbotService {
               const partes: string[] = [];
               partes.push('📦 *Nuevo pedido disponible*', '');
               partes.push(`🔁 *Tipo de servicio:*\n${String(tipo || 'servicio')}`);
+              partes.push(`👤 *Número del cliente:* ${numeroCliente}`); // 👈 AÑADIDO AQUÍ
+              partes.push(''); // línea en blanco
 
               if (datos.listaCompras) {
                 const listaRaw = String(datos.listaCompras).trim().replace(/\r\n?/g, '\n');
