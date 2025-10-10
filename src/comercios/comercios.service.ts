@@ -173,6 +173,22 @@ async getById(id: number) {
     return this.comercioRepo.save(comercio);
   }
 
+    // Actualizar un comercio
+  async update2(id: number, dto: UpdateComercioDto): Promise<Comercio> {
+    const comercio = await this.comercioRepo.findOne({ where: { id } });
+
+    if (!comercio) {
+      throw new NotFoundException(`Comercio con ID ${id} no encontrado`);
+    }
+
+    Object.assign(comercio, {
+      ...dto,
+      servicio: dto.servicio_id ? { id: dto.servicio_id } : comercio.servicio,
+    });
+
+    return await this.comercioRepo.save(comercio);
+  }
+
 
   // Eliminar un comercio
   async remove(id: number): Promise<void> {

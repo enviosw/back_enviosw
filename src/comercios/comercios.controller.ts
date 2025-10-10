@@ -115,6 +115,23 @@ export class ComerciosController {
     return this.comerciosService.update(id, updateComercioDto);
   }
 
+  @Patch('act/:id')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('administrador')
+  @UseInterceptors(
+    FileInterceptor('logo', { storage: FileUploadService.storage }),
+  ) // 'logo' es el nombre del campo del formulario
+  async update2(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateComercioDto: UpdateComercioDto,
+    @UploadedFile() file: Express.Multer.File, // Aquí se recibe el archivo
+  ) {
+    if (file) {
+      updateComercioDto.logo_url = file.filename; // Actualizamos el nombre del archivo
+    }
+    return this.comerciosService.update2(id, updateComercioDto);
+  }
+
   // Eliminar un comercio
   @Delete(':id')
   @UseGuards(AuthGuard, RolesGuard)
