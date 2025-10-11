@@ -5170,32 +5170,32 @@ Gracias por tu entrega y compromiso 👏
       this.logger.warn(`⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e}`);
     }
 
-    try {
-      // 👇 línea opcional con el valor si viene definido
-      // 👇 Línea dinámica con el valor del domicilio
-      const montoLinea =
-        (typeof monto === 'number' && Number.isFinite(monto))
-          ? `💵 Valor del domicilio: ${Math.round(monto).toLocaleString('es-CO', {
-            style: 'currency',
-            currency: 'COP',
-            minimumFractionDigits: 0
-          })}`
-          : '💵 Valor del domicilio: $5.000';
+    // try {
+    //   // 👇 línea opcional con el valor si viene definido
+    //   // 👇 Línea dinámica con el valor del domicilio
+    //   const montoLinea =
+    //     (typeof monto === 'number' && Number.isFinite(monto))
+    //       ? `💵 Valor del domicilio: ${Math.round(monto).toLocaleString('es-CO', {
+    //         style: 'currency',
+    //         currency: 'COP',
+    //         minimumFractionDigits: 0
+    //       })}`
+    //       : '💵 Valor del domicilio: $5.000';
 
-      const mensajeCliente = [
-        '✅ Pedido finalizado con éxito',
-        '',
-        montoLinea,
-        '',
-        '💬 Para cualquier duda con el precio, quejas o sugerencias contáctanos al 314 242 3130 📞'
-      ].join('\n');
+    //   const mensajeCliente = [
+    //     '✅ Pedido finalizado con éxito',
+    //     '',
+    //     montoLinea,
+    //     '',
+    //     '💬 Para cualquier duda con el precio, quejas o sugerencias contáctanos al 314 242 3130 📞'
+    //   ].join('\n');
 
 
 
-      await this.enviarMensajeTexto(cliente, mensajeCliente);
-    } catch (e: any) {
-      this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
-    }
+    //   await this.enviarMensajeTexto(cliente, mensajeCliente);
+    // } catch (e: any) {
+    //   this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
+    // }
 
     // ✅ NUEVO: cerrar el pedido como ENTREGADO (7) y dejar al domi disponible manteniendo turno
     try {
