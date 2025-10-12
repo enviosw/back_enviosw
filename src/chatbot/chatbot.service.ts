@@ -1575,7 +1575,7 @@ export class ChatbotService {
         this.logger.error(`❌ Error en trigger por texto "${TRIGGER_PALABRA_CLAVE}": ${err?.message || err}`);
         await this.enviarMensajeTexto(
           numero,
-          '❌ Ocurrió un problema creando tu pedido rápido. Intenta nuevamente.'
+          '❌ SI NO ESTAS AFILIADO, escribe "mas" para menu de afiliación afiliarte.'
         );
       }
       return;
