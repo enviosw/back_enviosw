@@ -577,31 +577,33 @@ export class ChatbotService {
             // Si NO hay domiciliarios: queda en espera + botón CANCELAR
             if (!domiciliario) {
               this.logger.warn(`⚠️ Sin domiciliarios para sticker id=${pedido.id}.`);
-              const cuerpo =
-                '🚨 *Sin domiciliarios disponibles en este momento*\n\n' +
-                'Te mantenemos en espera y lo asignaremos automáticamente cuando haya alguien libre.\n\n' +
-                'Si *ya no lo necesitas*, puedes cancelarlo con el botón o escribiendo *CANCELAR*.';
+              // const cuerpo =
+              //   '🚨 *Sin domiciliarios disponibles en este momento*\n\n' +
+              //   'Te mantenemos en espera y lo asignaremos automáticamente cuando haya alguien libre.\n\n' +
+              //   'Si *ya no lo necesitas*, puedes cancelarlo con el botón o escribiendo *CANCELAR*.';
 
-              try {
-                await axiosWhatsapp.post('/messages', {
-                  messaging_product: 'whatsapp',
-                  to: pedido.numero_cliente,
-                  type: 'interactive',
-                  interactive: {
-                    type: 'button',
-                    body: { text: cuerpo },
-                    action: {
-                      buttons: [
-                        { type: 'reply', reply: { id: `cancelar_pedido_${pedido.id}`, title: '❌ Cancelar pedido' } },
-                      ],
-                    },
-                  },
-                });
-                await this.enviarMensajeTexto(
-                  pedido.numero_cliente,
-                  'Si no ves el botón, responde con la palabra *CANCELAR* para anular tu pedido.'
-                );
-              } catch { }
+              // try {
+              //   await axiosWhatsapp.post('/messages', {
+              //     messaging_product: 'whatsapp',
+              //     to: pedido.numero_cliente,
+              //     type: 'interactive',
+              //     interactive: {
+              //       type: 'button',
+              //       body: { text: cuerpo },
+              //       action: {
+              //         buttons: [
+              //           { type: 'reply', reply: { id: `cancelar_pedido_${pedido.id}`, title: '❌ Cancelar pedido' } },
+              //         ],
+              //       },
+              //     },
+              //   });
+              //   await this.enviarMensajeTexto(
+              //     pedido.numero_cliente,
+              //     'Si no ves el botón, responde con la palabra *CANCELAR* para anular tu pedido.'
+              //   );
+              // } catch { }
+
+              
               await pausaSuave();
               procesados++;
               continue;
