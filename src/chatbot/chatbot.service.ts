@@ -1143,6 +1143,51 @@ export class ChatbotService {
         }
       }
 
+      // --- Handler "más" (mostrar botones extra) ---
+      {
+        // Usa tu normalización ya hecha: 'norm' == 'mas' con o sin tilde/mayúsculas
+        if (norm === 'mas') {
+          // Reglas: solo si NO hay flujo activo, NO hay conversación activa y NO está esperando asignación
+          const enFlujo = this.estaEnCualquierFlujo(numero);
+          const stMenu = estadoUsuarios.get(numeroKeyLocal) || {};
+          const hayConversacionActiva = Boolean(stMenu?.conversacionId);
+          const esperando = Boolean(stMenu?.esperandoAsignacion);
+
+          // Evitar interferir si el mensaje actual es de cancelar (por si WhatsApp repite eventos)
+          const pidCancelEarly =
+            mensaje?.interactive?.type === 'button_reply'
+              ? mensaje.interactive.button_reply.id
+              : '';
+          const esBtnCancelarEarly =
+            pidCancelEarly === 'cancelar' ||
+            pidCancelEarly === 'menu_cancelar' ||
+            /^cancelar_pedido_\d+$/.test(pidCancelEarly) ||
+            /^menu_cancelar_\d+$/.test(pidCancelEarly);
+
+          if (!enFlujo && !hayConversacionActiva && !esperando && !esBtnCancelarEarly) {
+            try {
+              if (!stMenu?.inicioMostrado) {
+                // Si aún no mostraste el menú inicial, muéstralo primero
+                await this.enviarMasBotones(numero);
+                // y sugiere usar "más" para ver más opciones
+              } else {
+                // Menú ya mostrado → envía los botones extra (opcion_4 y opcion_5)
+                await this.enviarMasBotones(numero);
+              }
+            } catch (e: any) {
+              this.logger.warn(`⚠️ Error al procesar "más" para ${numero}: ${e?.message || e}`);
+              await this.enviarMensajeTexto(
+                numero,
+                '❌ No pude mostrar más opciones. Intenta de nuevo escribiendo "más".'
+              );
+            }
+            return; // importante: no sigas con otros handlers de este mensaje
+          }
+        }
+      }
+      // --- fin handler "más" ---
+
+
     }
 
     // ── Normaliza a la clave de teléfono (57 + 10 dígitos)
@@ -1483,7 +1528,9 @@ export class ChatbotService {
 
           // 🔄 Reinicio inmediato del bot (hard reset)
           estadoUsuarios.delete(numero);
-          await this.enviarListaOpciones(numero);
+          await this.enviarSaludoYBotones(numero, nombre);
+          await this.enviarMensajeTexto(numero, '✍️ Escribe *más* para ver más opciones.');
+
           return;
         }
 
@@ -1548,6 +1595,32 @@ export class ChatbotService {
     // 🔀 PUENTE PSQR: reenvía mensajes entre cliente y asesor
     // Nota: este bloque va ANTES del "if (estado?.conversacionId) {...}" de domiciliarios.
     const st = estadoUsuarios.get(numero);
+
+    // 🔀 PUENTE AFILIACIONES: reenvía mensajes entre cliente y asesor de aliados
+
+
+    if (st?.afiliacionActiva && st?.afiliacionConversacionId) {
+      const textoPlano = (texto || '').trim();
+
+      // ✅ Permitir que CUALQUIERA (asesor o cliente) cierre con "cerrar"
+      if (tipo === 'text' && /^cerrar$/i.test(textoPlano)) {
+        await this.finalizarAfiliacionPorCualquiera(numero);
+        return;
+      }
+
+      // 2) Determinar el otro participante
+      const esAsesorAf = !!st.afiliacionCliente; // si existe afiliacionCliente => soy asesor
+      const otro = esAsesorAf ? st.afiliacionCliente : st.afiliacionAsesor;
+
+      // 3) Reenviar el mensaje con prefijo
+      if (tipo === 'text' && texto && otro) {
+        const prefijo = esAsesorAf ? '👩‍💼' : '🙋‍♀️';
+        await this.enviarMensajeTexto(otro, `${prefijo} ${texto}`);
+      }
+
+      // 4) No cerrar por inactividad mientras esté activo
+      return;
+    }
 
 
 
@@ -1740,8 +1813,9 @@ export class ChatbotService {
       }
 
       // 🚀 Lista de opciones
-      await this.enviarSaludoYLista(numero, nombre);
+      await this.enviarSaludoYBotones(numero, nombre);
 
+      await this.enviarMensajeTexto(numero, '✍️ Escribe *más* para ver más opciones.');
 
       return;
     }
@@ -1774,7 +1848,10 @@ export class ChatbotService {
 
             // 🔄 Reinicio inmediato del bot (hard reset)
             estadoUsuarios.delete(numero);
-            await this.enviarListaOpciones(numero);
+            await this.enviarSaludoYBotones(numero, nombre);
+
+
+            await this.enviarMensajeTexto(numero, '✍️ Escribe *más* para ver más opciones.');
 
             return;
           }
@@ -1805,6 +1882,54 @@ export class ChatbotService {
 
     if (mensaje?.interactive?.type === 'button_reply') {
       const id = mensaje.interactive.button_reply.id;
+
+
+      // ===== MENÚ PRINCIPAL (antes era list_reply) =====
+      if (/^opcion_[1-6]$/.test(id)) {
+        // Reiniciar estado del usuario antes de comenzar nuevo flujo
+        estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: id });
+
+        switch (id) {
+          case 'opcion_1':
+            await this.opcion1PasoAPaso(numero, '');
+            return;
+
+          case 'opcion_2':
+            await this.opcion2PasoAPaso(numero, '');
+            return;
+
+          case 'opcion_3':
+            await this.opcion3PasoAPaso(numero, '');
+            return;
+
+          case 'opcion_4': {
+            const st4 = estadoUsuarios.get(numero) || { paso: 0, datos: {} };
+            st4.flujoActivo = true;
+            st4.tipo = 'restaurantes';
+            estadoUsuarios.set(numero, st4);
+            await this.enviarMensajeTexto(
+              numero,
+              '🍽️ Mira nuestras cartas de *RESTAURANTES* en: https://domiciliosw.com'
+            );
+            return;
+          }
+
+          case 'opcion_5':
+            // Inicia el puente de soporte PSQR (cliente ↔ asesor)
+            await this.iniciarSoportePSQR(numero, nombre);
+            return;
+
+          case 'opcion_6':
+            // Inicia el puente de soporte PSQR (cliente ↔ asesor)
+            await this.iniciarAfiliacionAliado(numero, nombre);
+            return;
+
+
+          default:
+            await this.enviarMensajeTexto(numero, '❓ Opción no reconocida.');
+            return;
+        }
+      }
 
 
       // ===== CAMBIAR ZONA (mostrar 2 botones) =====
@@ -3202,46 +3327,46 @@ export class ChatbotService {
 
 
     // ✅ 1. Procesar selección de lista interactiva
-    if (tipo === 'interactive' && mensaje?.interactive?.type === 'list_reply') {
-      const opcionSeleccionada = mensaje.interactive.list_reply.id;
+    // if (tipo === 'interactive' && mensaje?.interactive?.type === 'list_reply') {
+    //   const opcionSeleccionada = mensaje.interactive.list_reply.id;
 
-      // Reiniciar estado del usuario antes de comenzar nuevo flujo
-      estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: opcionSeleccionada });
+    //   // Reiniciar estado del usuario antes de comenzar nuevo flujo
+    //   estadoUsuarios.set(numero, { paso: 0, datos: {}, tipo: opcionSeleccionada });
 
-      switch (opcionSeleccionada) {
-        case 'opcion_1':
-          await this.opcion1PasoAPaso(numero, '');
-          return;
-        case 'opcion_2':
-          await this.opcion2PasoAPaso(numero, '');
-          return;
-        case 'opcion_3':
-          await this.opcion3PasoAPaso(numero, '');
-          return;
-        case 'opcion_4':
-          const st4 = estadoUsuarios.get(numero) || { paso: 0, datos: {} };
-          st4.flujoActivo = true;
-          st4.tipo = 'restaurantes';
-          estadoUsuarios.set(numero, st4);
-          await this.enviarMensajeTexto(
-            numero,
-            '🍽️ Mira nuestras cartas de *RESTAURANTES* en: https://domiciliosw.com'
-          );
-          return;
+    //   switch (opcionSeleccionada) {
+    //     case 'opcion_1':
+    //       await this.opcion1PasoAPaso(numero, '');
+    //       return;
+    //     case 'opcion_2':
+    //       await this.opcion2PasoAPaso(numero, '');
+    //       return;
+    //     case 'opcion_3':
+    //       await this.opcion3PasoAPaso(numero, '');
+    //       return;
+    //     case 'opcion_4':
+    //       const st4 = estadoUsuarios.get(numero) || { paso: 0, datos: {} };
+    //       st4.flujoActivo = true;
+    //       st4.tipo = 'restaurantes';
+    //       estadoUsuarios.set(numero, st4);
+    //       await this.enviarMensajeTexto(
+    //         numero,
+    //         '🍽️ Mira nuestras cartas de *RESTAURANTES* en: https://domiciliosw.com'
+    //       );
+    //       return;
 
-        case 'opcion_5': {
-          // Inicia el puente de soporte PSQR (cliente ↔ asesor)
-          await this.iniciarSoportePSQR(numero, nombre);
-          return;
-        }
+    //     case 'opcion_5': {
+    //       // Inicia el puente de soporte PSQR (cliente ↔ asesor)
+    //       await this.iniciarSoportePSQR(numero, nombre);
+    //       return;
+    //     }
 
 
 
-        default:
-          await this.enviarMensajeTexto(numero, '❓ Opción no reconocida.');
-          return;
-      }
-    }
+    //     default:
+    //       await this.enviarMensajeTexto(numero, '❓ Opción no reconocida.');
+    //       return;
+    //   }
+    // }
 
 
     // ✅ 1. Arrancar conversación con cualquier texto si no hay flujo activo
@@ -3270,7 +3395,7 @@ export class ChatbotService {
 
 
 
-      await this.enviarSaludoYLista(numero, nombre);
+      await this.enviarSaludoYBotones(numero, nombre);
 
 
       estado.inicioMostrado = true;
@@ -3339,76 +3464,113 @@ export class ChatbotService {
   }
 
 
-  private async enviarListaOpciones(numero: string): Promise<void> {
+  // private async enviarListaOpciones(numero: string): Promise<void> {
+  //   try {
+  //     await axiosWhatsapp.post('/messages', {
+  //       messaging_product: 'whatsapp',
+  //       to: numero,
+  //       type: 'interactive',
+  //       interactive: {
+  //         type: 'list',
+  //         // header: {
+  //         //     type: 'text',
+  //         //     text: '¡Hola, soy Wilber!',
+  //         // },
+  //         body: {
+  //           text: `*O selecciona el servicio que deseas:* 👇`,
+  //         },
+  //         // footer: {
+  //         //   text: 'Estamos para servirte 🧡',
+  //         // },
+  //         action: {
+  //           button: 'Pedir servicio 🛵',
+  //           sections: [
+  //             {
+  //               title: 'Servicios disponibles',
+  //               rows: [
+  //                 {
+  //                   id: 'opcion_1',
+  //                   title: '1. Recoger y entregar',
+  //                   description: 'Envíos puerta a puerta',
+  //                 },
+  //                 {
+  //                   id: 'opcion_2',
+  //                   title: '2. Realizar una compra',
+  //                   description: 'Compramos lo que necesites',
+  //                 },
+  //                 {
+  //                   id: 'opcion_3',
+  //                   title: '3. Hacer un pago',
+  //                   description: 'Pagamos por ti y entregamos el recibo',
+  //                 },
+  //                 {
+  //                   id: 'opcion_4',
+  //                   title: '4. Ver Restaurantes',
+  //                   description: 'Explora nuestros aliados gastronómicos',
+  //                 },
+  //                 {
+  //                   id: 'opcion_5',
+  //                   title: '5. PSQR',
+  //                   description: 'Peticiones, sugerencias, quejas o reclamos',
+  //                 },
+  //               ],
+  //             },
+  //           ],
+  //         },
+  //       },
+  //     });
+
+  //     this.logger.log(`✅ Lista de opciones enviada a ${numero}`);
+  //   } catch (error) {
+  //     this.logger.error('❌ Error al enviar lista:', error.response?.data || error.message);
+  //   }
+  // }
+
+  // Envía los 2 botones restantes cuando el usuario escribe "más"
+  private async enviarMasBotones(numero: string): Promise<void> {
     try {
       await axiosWhatsapp.post('/messages', {
         messaging_product: 'whatsapp',
         to: numero,
         type: 'interactive',
         interactive: {
-          type: 'list',
-          // header: {
-          //     type: 'text',
-          //     text: '¡Hola, soy Wilber!',
-          // },
-          body: {
-            text: `*O selecciona el servicio que deseas:* 👇`,
-          },
-          // footer: {
-          //   text: 'Estamos para servirte 🧡',
-          // },
+          type: 'button',
+          body: { text: 'Aquí tienes más opciones 👇' },
+          // footer opcional:
+          // footer: { text: 'Escribe "menú" para volver al inicio.' },
           action: {
-            button: 'Pedir servicio 🛵',
-            sections: [
-              {
-                title: 'Servicios disponibles',
-                rows: [
-                  {
-                    id: 'opcion_1',
-                    title: '1. Recoger y entregar',
-                    description: 'Envíos puerta a puerta',
-                  },
-                  {
-                    id: 'opcion_2',
-                    title: '2. Realizar una compra',
-                    description: 'Compramos lo que necesites',
-                  },
-                  {
-                    id: 'opcion_3',
-                    title: '3. Hacer un pago',
-                    description: 'Pagamos por ti y entregamos el recibo',
-                  },
-                  {
-                    id: 'opcion_4',
-                    title: '4. Ver Restaurantes',
-                    description: 'Explora nuestros aliados gastronómicos',
-                  },
-                  {
-                    id: 'opcion_5',
-                    title: '5. PSQR',
-                    description: 'Peticiones, sugerencias, quejas o reclamos',
-                  },
-                ],
-              },
-            ],
-          },
-        },
+            buttons: [
+              { type: 'reply', reply: { id: 'opcion_4', title: '4) Restaurantes' } }, // 16
+              { type: 'reply', reply: { id: 'opcion_5', title: '5) PSQR' } },         // 7
+              { type: 'reply', reply: { id: 'opcion_6', title: '6) Afiliaciones' } },         // 7
+
+              // Puedes agregar un tercer botón si quieres (máx. 3),
+              // por ejemplo para "Volver al menú":
+              // { type: 'reply', reply: { id: 'menu_inicio', title: '↩️ Menú inicial' } }
+            ]
+          }
+        }
       });
 
-      this.logger.log(`✅ Lista de opciones enviada a ${numero}`);
-    } catch (error) {
-      this.logger.error('❌ Error al enviar lista:', error.response?.data || error.message);
+      this.logger.log(`✅ Botones "más" enviados a ${numero}`);
+    } catch (error: any) {
+      this.logger.error('❌ Error al enviar botones extra:', error.response?.data || error.message);
     }
   }
 
+
   // Envía un saludo + lista en UN solo mensaje interactivo (list)
-  private async enviarSaludoYLista(numero: string, nombre: string): Promise<void> {
+  // Envía un saludo + 3 botones (interactive.button)
+  private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
     const bodyTexto = [
-      `👋 Hola ${nombre}, soy Wil-Bot 🤖`,
-      `Tu asistente virtual: pide rápido y fácil en`,
-      `🌐 https://domiciliosw.com`,
+      `👋 ¡Hola ${nombre}! Soy *Wil-Bot* 🤖`,
+      `Tu contestador automático 🧡`,
       ``,
-      `*O selecciona el servicio que deseas:* 👇`
+      `🌐 Pide rápido y fácil en https://domiciliosw.com`,
+      ``,
+      `Si ya eres cliente registrado, envía el número *1*, confirma ¡y listo! ✅`,
+      ``,
+      `*O ELIGE UNA OPCIÓN:* 👇`
     ].join('\n');
 
     try {
@@ -3417,35 +3579,24 @@ export class ChatbotService {
         to: numero,
         type: 'interactive',
         interactive: {
-          type: 'list',
-          // Si quieres un header visible, descomenta:
-          // header: { type: 'text', text: '¡Bienvenido!' },
+          type: 'button',
           body: { text: bodyTexto },
-          // footer opcional:
-          // footer: { text: 'Estamos para servirte 🧡' },
           action: {
-            button: 'Pedir servicio 🛵',
-            sections: [
-              {
-                title: 'Servicios disponibles',
-                rows: [
-                  { id: 'opcion_1', title: '1. Recoger y entregar', description: 'Envíos puerta a puerta' },
-                  { id: 'opcion_2', title: '2. Realizar una compra', description: 'Compramos lo que necesites' },
-                  { id: 'opcion_3', title: '3. Hacer un pago', description: 'Pagamos por ti y entregamos el recibo' },
-                  { id: 'opcion_4', title: '4. Ver Restaurantes', description: 'Explora nuestros aliados gastronómicos' },
-                  { id: 'opcion_5', title: '5. PSQR', description: 'Peticiones, sugerencias, quejas o reclamos' },
-                ],
-              },
-            ],
-          },
-        },
+            buttons: [
+              { type: 'reply', reply: { id: 'opcion_1', title: '1) Recoger/Entregar' } },
+              { type: 'reply', reply: { id: 'opcion_2', title: '2) Hacer compra' } },
+              { type: 'reply', reply: { id: 'opcion_3', title: '3) Hacer pago' } },
+            ]
+          }
+        }
       });
 
-      this.logger.log(`✅ Saludo + lista enviados a ${numero}`);
+      this.logger.log(`✅ Saludo + botones enviados a ${numero}`);
     } catch (error: any) {
-      this.logger.error('❌ Error al enviar saludo/lista:', error.response?.data || error.message);
+      this.logger.error('❌ Error al enviar saludo/botones:', error.response?.data || error.message);
     }
   }
+
 
 
   async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
@@ -3917,8 +4068,9 @@ export class ChatbotService {
         await this.enviarMensajeTexto(
           numero,
           '💰 Vamos a recoger dinero/facturas.\n' +
-          '📍 Envíame la *dirección de RECOGER*.\n' +
-          '👉 Si quieres, puedes escribir la dirección y el teléfono *en el mismo mensaje*.\n' +
+          '📍 Envíame la *dirección de RECOGER*.\n\n' +
+          '👉 Escribe la dirección y el teléfono en un solo mensaje. 🏠📞'
+          + '\n\n' +
           '🔐 Si el pago supera 200.000, escribe al 314 242 3130.'
         );
         estado.paso = 1;
@@ -5308,6 +5460,54 @@ Gracias por tu entrega y compromiso 👏
     estadoUsuarios.set(ASESOR_PSQR, stAsesor);
   }
 
+  // ⚙️ Crear/activar puente de afiliación con el mismo asesor PSQR
+  private async iniciarAfiliacionAliado(numeroCliente: string, nombreCliente?: string) {
+    // 1️⃣ Mensaje al cliente
+    const msgCliente = [
+      '🤝 *AFILIACIONES DOMICILIOSW*',
+      '¡Gracias por tu interés en ser *Aliado de Pedidos Rápidos*! 🚀',
+      '',
+      'Por favor, escribe (en un solo mensaje):',
+      '• 🏪 *Nombre del comercio*',
+      '• 👤 *Responsable*',
+      '• 📞 *Teléfono*',
+      '• 🏠 *Dirección* (o barrio/ciudad)',
+      '',
+      '✍️ Escribe aquí la información y un asesor te atenderá en este chat.',
+      '❌ Escribe *cerrar* para terminar la conversación.'
+    ].join('\n');
+
+    await this.enviarMensajeTexto(numeroCliente, msgCliente);
+
+    // 2️⃣ Aviso al asesor (usa el mismo del PSQR)
+    const msgAsesor = [
+      '🛎️ *NUEVA SOLICITUD DE AFILIACIÓN*',
+      `👤 Prospecto: ${nombreCliente || 'Comercio'}`,
+      `📱 Teléfono: ${numeroCliente}`,
+      '',
+      '💬 Responde aquí para iniciar el chat de afiliación.',
+      '🧷 Escribe *cerrar* cuando cierres el caso.'
+    ].join('\n');
+
+    await this.enviarMensajeTexto(ASESOR_PSQR, msgAsesor);
+
+    // 3️⃣ Registrar el puente en memoria (igual que PSQR)
+    const convId = `afiliacion-${Date.now()}-${numeroCliente}`;
+
+    const stCliente = estadoUsuarios.get(numeroCliente) || {};
+    stCliente.afiliacionActiva = true;
+    stCliente.afiliacionConversacionId = convId;
+    stCliente.afiliacionAsesor = ASESOR_PSQR;
+    estadoUsuarios.set(numeroCliente, stCliente);
+
+    const stAsesor = estadoUsuarios.get(ASESOR_PSQR) || {};
+    stAsesor.afiliacionActiva = true;
+    stAsesor.afiliacionConversacionId = convId;
+    stAsesor.afiliacionCliente = numeroCliente;
+    estadoUsuarios.set(ASESOR_PSQR, stAsesor);
+  }
+
+
   // 🧹 Finaliza el puente PSQR sin importar quién envía "salir"
   private async finalizarSoportePSQRPorCualquiera(quienEscribe: string) {
     const st = estadoUsuarios.get(quienEscribe);
@@ -5348,6 +5548,49 @@ Gracias por tu entrega y compromiso 👏
     delete stAsesor.soporteActivo;
     delete stAsesor.soporteConversacionId;
     delete stAsesor.soporteCliente;
+    estadoUsuarios.set(asesor, stAsesor);
+  }
+
+  // 🧹 Finaliza el puente de AFILIACIONES sin importar quién envía "salir"
+  private async finalizarAfiliacionPorCualquiera(quienEscribe: string) {
+    const st = estadoUsuarios.get(quienEscribe);
+    const convId = st?.afiliacionConversacionId;
+
+    // Detectar roles y contrapartes
+    let cliente = st?.afiliacionCliente ? st.afiliacionCliente : (st?.afiliacionAsesor ? quienEscribe : null);
+    let asesor = st?.afiliacionAsesor ? st.afiliacionAsesor : (st?.afiliacionCliente ? quienEscribe : null);
+
+    // Fallback por si el asesor es el fijo ASESOR_PSQR
+    if (!asesor && st?.afiliacionConversacionId) asesor = ASESOR_PSQR;
+
+    if (!convId || !cliente || !asesor) {
+      // Nada que cerrar
+      return;
+    }
+
+    // 1️⃣ Mensaje de cierre al cliente
+    const gracias = [
+      '🧡 *Gracias por tu interés en ser parte de DomiciliosW*',
+      'Tu solicitud de *afiliación* ha sido *cerrada*. 🤝',
+      '',
+      'Si deseas continuar más adelante, solo escribe *Afiliar*. 🚀'
+    ].join('\n');
+    await this.enviarMensajeTexto(cliente, gracias);
+
+    // 2️⃣ Aviso al asesor
+    await this.enviarMensajeTexto(asesor, '✅ Afiliación cerrada correctamente.');
+
+    // 3️⃣ Limpiar estados en memoria
+    const stCliente = estadoUsuarios.get(cliente) || {};
+    delete stCliente.afiliacionActiva;
+    delete stCliente.afiliacionConversacionId;
+    delete stCliente.afiliacionAsesor;
+    estadoUsuarios.set(cliente, stCliente);
+
+    const stAsesor = estadoUsuarios.get(asesor) || {};
+    delete stAsesor.afiliacionActiva;
+    delete stAsesor.afiliacionConversacionId;
+    delete stAsesor.afiliacionCliente;
     estadoUsuarios.set(asesor, stAsesor);
   }
 
