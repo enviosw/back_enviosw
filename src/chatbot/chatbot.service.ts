@@ -3540,9 +3540,9 @@ export class ChatbotService {
           // footer: { text: 'Escribe "menú" para volver al inicio.' },
           action: {
             buttons: [
-              { type: 'reply', reply: { id: 'opcion_4', title: '4) Restaurantes' } }, // 16
-              { type: 'reply', reply: { id: 'opcion_5', title: '5) PSQR' } },         // 7
-              { type: 'reply', reply: { id: 'opcion_6', title: '6) Afiliaciones' } },         // 7
+              { type: 'reply', reply: { id: 'opcion_4', title: '🍔 Restaurantes' } }, // 16
+              { type: 'reply', reply: { id: 'opcion_5', title: '🤷 PSQR' } },         // 7
+              { type: 'reply', reply: { id: 'opcion_6', title: '📝 Registrarme' } },         // 7
 
               // Puedes agregar un tercer botón si quieres (máx. 3),
               // por ejemplo para "Volver al menú":
@@ -3583,9 +3583,9 @@ export class ChatbotService {
           body: { text: bodyTexto },
           action: {
             buttons: [
-              { type: 'reply', reply: { id: 'opcion_1', title: '1) Recoger/Entregar' } },
-              { type: 'reply', reply: { id: 'opcion_2', title: '2) Hacer compra' } },
-              { type: 'reply', reply: { id: 'opcion_3', title: '3) Hacer pago' } },
+              { type: 'reply', reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' } },
+              { type: 'reply', reply: { id: 'opcion_2', title: '🛒 Hacer compra' } },
+              { type: 'reply', reply: { id: 'opcion_3', title: '💰 Hacer pago' } },
             ]
           }
         }
