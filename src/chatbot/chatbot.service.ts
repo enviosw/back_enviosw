@@ -9,7 +9,7 @@ import { Conversacion } from './entities/conversacion.entity';
 import { Repository } from 'typeorm';
 import { Mensaje } from './entities/mensajes.entity';
 import { Cron, Interval } from '@nestjs/schedule';
-import { stickerConstants, urlImagenConstants } from '../auth/constants/jwt.constant';
+import { stickerConstants } from '../auth/constants/jwt.constant';
 import { PrecioDomicilio } from './entities/precio-domicilio.entity';
 
 
@@ -23,6 +23,11 @@ const ESTADO_COOLDOWN_MS = 5 * 60 * 1000; // 5 min
 function isExpired(ts?: number) {
   return !ts || Date.now() >= ts;
 }
+
+// Sesiones de confirmación de sticker por número (tel normalizado) → { nonce, used, expiresAt }
+const stickerConfirmSessions = new Map<string, { nonce: string; used: boolean; expiresAt: number }>();
+const STICKER_CONFIRM_TTL_MS = 25 * 60 * 1000; // 5 min de validez
+
 
 const limpiarNombre = (s?: string) =>
   String(s ?? '')
@@ -603,7 +608,7 @@ export class ChatbotService {
               //   );
               // } catch { }
 
-              
+
               await pausaSuave();
               procesados++;
               continue;
@@ -1770,7 +1775,6 @@ export class ChatbotService {
       }
 
       // Reenviar el mensaje al otro participante
-      // Reenviar el mensaje al otro participante
       if (tipo === 'text' && texto) {
         await this.enviarMensajeTexto(receptor, `💬 ${texto}`);
 
@@ -2358,6 +2362,7 @@ export class ChatbotService {
 
 
       // ======================= RECHAZAR PEDIDO =======================
+      // ======================= RECHAZAR PEDIDO =======================
       const matchRechazar = id.match(/^(?:RECHAZAR|rechazar_pedido)_(\d+)$/);
       if (matchRechazar) {
         const pedidoId = Number(matchRechazar[1]);
@@ -2368,30 +2373,21 @@ export class ChatbotService {
         const last = procesados.get(key);
         if (last && (now - last) < TTL_MS) return;
 
+        // Helper: asegurar disponibilidad manteniendo turno + mensaje uniforme
+        const mantenerTurnoYAvisar = async (razonMsg: string) => {
+          if (razonMsg) await this.enviarMensajeTexto(numero, razonMsg);
+          try {
+            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
+          } catch (e) {
+            this.logger.warn(`⚠️ Falló al actualizar disponibilidad (mantener turno): ${e?.message || e}`);
+          }
+          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
+        };
+
         // 🔎 Pre-chequeo rápido por estado
         const pedidoCheck = await this.getPedidoById(pedidoId);
         if (!pedidoCheck) {
-          await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no existe.');
-          // CAMBIO: ofrecer botones sin reactivar automáticamente
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (no existe): ${e?.message || e}`);
-          }
+          await mantenerTurnoYAvisar('⚠️ El pedido ya no existe.');
           procesados.set(key, now);
           return;
         }
@@ -2408,102 +2404,47 @@ export class ChatbotService {
             `expirado=${vig ? Date.now() > vig.expira : 'n/a'} ` +
             `domiOK=${vig ? (vig.domi === who) : 'n/a'}`
           );
-          // OJO: no hacemos return; la BD decide
+          // No hacemos return; la BD decide
         }
 
-        // ===== ESTADOS DONDE "YA NO ESTÁ DISPONIBLE" → SÍ reactivamos manteniendo turno
+        // ===== ASIGNADO (1): no deja rechazar, pero se mantiene turno igual
         if (pedidoCheck.estado === 1) { // ASIGNADO
-          await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue asignado, no puedes rechazarlo.');
-          try {
-            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló al actualizar disponibilidad (asignado): ${e?.message || e}`);
-          }
-          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
+          await mantenerTurnoYAvisar('⏱️ El pedido ya fue asignado, no puedes rechazarlo.');
           procesados.set(key, now);
           return;
         }
 
+        // ===== CANCELADO (2): se mantiene turno igual
         if (pedidoCheck.estado === 2) { // CANCELADO
-          await this.enviarMensajeTexto(numero, '⏱️ El pedido ya fue cancelado.');
-          try {
-            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló al actualizar disponibilidad (cancelado): ${e?.message || e}`);
-          }
-          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
+          await mantenerTurnoYAvisar('⏱️ El pedido ya fue cancelado.');
           procesados.set(key, now);
           return;
         }
 
-        // CAMBIO: tratar explícitamente estado 0 (PENDIENTE) → NO reactivar, solo botones
+        // ===== PENDIENTE (0): antes solo botones; ahora SIEMPRE mantener turno
         if (pedidoCheck.estado === 0) { // PENDIENTE
-          await this.enviarMensajeTexto(numero, '⏱️ El pedido volvió a la cola y está pendiente. No fue asignado.');
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (pendiente): ${e?.message || e}`);
-          }
+          await mantenerTurnoYAvisar('⏱️ El pedido volvió a la cola y está pendiente. No fue asignado.');
           procesados.set(key, now);
           return;
         }
 
-        // CAMBIO: si NO es OFERTADO (5) ni los casos de arriba → se considera “ya no disponible”
+        // ===== Si NO es OFERTADO (5): antes ya se mantenía; se conserva la conducta
         if (pedidoCheck.estado !== 5) {
-          await this.enviarMensajeTexto(numero, '⏱️ Te demoraste en responder. El pedido ya no está disponible.');
-          try {
-            await this.domiciliarioService.setDisponibleManteniendoTurnoByTelefono(numero, true);
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló al actualizar disponibilidad (no ofertado): ${e?.message || e}`);
-          }
-          await this.enviarMensajeTexto(numero, '✅ Sigues disponible y conservas tu turno.');
+          await mantenerTurnoYAvisar('⏱️ Te demoraste en responder. El pedido ya no está disponible.');
           procesados.set(key, now);
           return;
         }
 
-        // ===== ESTADO 5 (OFERTADO): revertir a PENDIENTE pero NO reactivar automáticamente
-        // ⛳️ **GUARDA EL DOMI ANTES DE REVERTIR** (porque luego puede quedar en null)
+        // ===== OFERTADO (5): revertir a PENDIENTE y TAMBIÉN mantener turno siempre
         const pedidoAntes = await this.getPedidoById(pedidoId);
-        const domiIdOriginal = pedidoAntes?.id_domiciliario ?? null;
+        const domiIdOriginal = pedidoAntes?.id_domiciliario ?? null; // (se conserva por si lo usas en métricas/auditoría)
 
-        // 🚦 Intento atómico: revertir solo si sigue en estado OFERTADO (5)
+        // Intento atómico: revertir solo si sigue en OFERTADO (5)
         const ok = await this.domiciliosService.volverAPendienteSiOfertado(pedidoId);
         procesados.set(key, now);
 
         if (!ok) {
-          await this.enviarMensajeTexto(numero, '⏱️ Te demoraste en responder. El pedido ya no está disponible.');
-          // CAMBIO: ofrecer botones (no reactivar)
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch { }
+          await mantenerTurnoYAvisar('⏱️ Te demoraste en responder. El pedido ya no está disponible.');
           return;
         }
 
@@ -2511,34 +2452,13 @@ export class ChatbotService {
         const t = temporizadoresOferta?.get?.(pedidoId);
         if (t) { clearTimeout(t); temporizadoresOferta.delete(pedidoId); }
 
-        // CAMBIO: **NO** marcar disponible automáticamente si estaba en 5; solo ofrecer botones
-        try {
-          await this.enviarMensajeTexto(
-            numero,
-            '❌ Has rechazado el pedido. La oferta se liberó. Puedes decidir tu disponibilidad: OBLIGATORIO!!'
-          );
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: numero,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: 'Elige tu estado:' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                  { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                ],
-              },
-            },
-          });
-        } catch (e) {
-          this.logger.warn(`No se pudieron enviar botones de estado tras rechazo en pedido ${pedidoId}: ${e instanceof Error ? e.message : e}`);
-        }
+        // Mensaje de rechazo + mantener turno (sin pedir confirmación de disponibilidad)
+        await mantenerTurnoYAvisar('❌ Has rechazado el pedido. La oferta se liberó.');
 
         // Reintentar asignación a otros domis (tu flujo actual)
         return;
       }
+
       // ===================== FIN RECHAZAR PEDIDO =====================
 
 
