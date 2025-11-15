@@ -20,22 +20,22 @@ export class DomiciliosService {
   // =========================
 
   async create(createDomicilioDto: CreateDomicilioDto): Promise<Domicilio> {
-  const { cliente, ...rest } = createDomicilioDto as any;
+    const { cliente, ...rest } = createDomicilioDto as any;
 
-  // cliente -> id_cliente (soporta número u objeto {id})
-  const rawCliente = (cliente && typeof cliente === 'object') ? cliente.id : cliente;
-  const parsedIdCliente = Number.isFinite(Number(rawCliente)) ? Number(rawCliente) : null;
+    // cliente -> id_cliente (soporta número u objeto {id})
+    const rawCliente = (cliente && typeof cliente === 'object') ? cliente.id : cliente;
+    const parsedIdCliente = Number.isFinite(Number(rawCliente)) ? Number(rawCliente) : null;
 
-  const payload: DeepPartial<Domicilio> = {
-    ...rest,
-    id_cliente: parsedIdCliente,
-  };
+    const payload: DeepPartial<Domicilio> = {
+      ...rest,
+      id_cliente: parsedIdCliente,
+    };
 
-  // 🔒 Tipos explícitos para que tome el overload de entidad
-  const nuevo: Domicilio = this.domicilioRepo.create(payload as DeepPartial<Domicilio>);
-  const guardado: Domicilio = await this.domicilioRepo.save<Domicilio>(nuevo);
-  return guardado;
-}
+    // 🔒 Tipos explícitos para que tome el overload de entidad
+    const nuevo: Domicilio = this.domicilioRepo.create(payload as DeepPartial<Domicilio>);
+    const guardado: Domicilio = await this.domicilioRepo.save<Domicilio>(nuevo);
+    return guardado;
+  }
 
   async findAll(): Promise<Domicilio[]> {
     return this.domicilioRepo.find({
@@ -45,14 +45,14 @@ export class DomiciliosService {
   }
 
   // domicilios.service.ts
-async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
-  return this.domicilioRepo
-    .createQueryBuilder('d')
-    .where('d.numero_cliente = :num', { num: numeroCliente })
-    .andWhere('d.estado IN (:...estados)', { estados: [0, 5] }) // 0=pte, 5=ofertado
-    .orderBy('d.fecha_creacion', 'DESC')
-    .getOne();
-}
+  async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
+    return this.domicilioRepo
+      .createQueryBuilder('d')
+      .where('d.numero_cliente = :num', { num: numeroCliente })
+      .andWhere('d.estado IN (:...estados)', { estados: [0, 5] }) // 0=pte, 5=ofertado
+      .orderBy('d.fecha_creacion', 'DESC')
+      .getOne();
+  }
 
 
   async find(options: FindManyOptions<Domicilio>): Promise<Domicilio[]> {
@@ -165,9 +165,10 @@ async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(Domicilio);
 
-      // Bloquea el registro del pedido
+      // Bloquea el registro del pedido y trae también el domiciliario
       const pedido = await repo
         .createQueryBuilder('d')
+        .leftJoinAndSelect('d.domiciliario', 'domi')
         .setLock('pessimistic_write')
         .where('d.id = :id', { id: pedidoId })
         .getOne();
@@ -175,7 +176,22 @@ async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
       if (!pedido) return false;
       if (pedido.estado !== 5) return false; // ya no está OFERTADO
 
-      // 1) Limpia la relación mediante RelationQueryBuilder (evita asignar null a la propiedad TS)
+      // 👇 ID del domiciliario que tenía la oferta
+      const domiId = pedido.domiciliario?.id ?? null;
+
+      // 👇 Acá registramos el rechazo en el array domiciliarios_rechazo_ids
+      if (domiId) {
+        const actuales = Array.isArray(pedido.domiciliarios_rechazo_ids)
+          ? pedido.domiciliarios_rechazo_ids
+          : [];
+
+        if (!actuales.includes(domiId)) {
+          // sumamos el id al array (sin duplicar)
+          pedido.domiciliarios_rechazo_ids = [...actuales, domiId];
+        }
+      }
+
+      // 1) Limpia la relación mediante RelationQueryBuilder
       await manager
         .createQueryBuilder()
         .relation(Domicilio, 'domiciliario')
@@ -185,14 +201,15 @@ async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
       // 2) Actualiza el resto de campos
       pedido.estado = 0; // PENDIENTE
       (pedido as any).fecha_asignacion = null;
-      // si quieres dejar constancia del motivo del “rollback” de oferta:
-      (pedido as any).motivo_cancelacion = 'No respuesta de domiciliario';
+      // puedes cambiar el texto si quieres diferenciar rechazo vs no respuesta
+      (pedido as any).motivo_cancelacion = 'Rechazado por domiciliario';
       (pedido as any).fecha_cancelacion = null;
 
       await repo.save(pedido);
       return true;
     });
   }
+
   /**
    * Cancela por timeout SOLO si sigue PENDIENTE (0).
    */
@@ -202,12 +219,32 @@ async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
 
       const pedido = await repo
         .createQueryBuilder('d')
+        .leftJoinAndSelect('d.domiciliario', 'domi') // 👈 traemos también el domi
         .setLock('pessimistic_write')
         .where('d.id = :id', { id: pedidoId })
         .getOne();
 
       if (!pedido) return false;
       if (pedido.estado !== 0) return false; // ya no está pendiente
+
+      // 👇 Si hay un domiciliario asignado al momento del timeout, lo guardamos como "rechazo"
+      const domiId = pedido.domiciliario?.id ?? null;
+      if (domiId) {
+        const actuales = Array.isArray(pedido.domiciliarios_rechazo_ids)
+          ? pedido.domiciliarios_rechazo_ids
+          : [];
+
+        if (!actuales.includes(domiId)) {
+          pedido.domiciliarios_rechazo_ids = [...actuales, domiId];
+        }
+
+        // Opcional: limpiar la relación, por si quedó colgada
+        await manager
+          .createQueryBuilder()
+          .relation(Domicilio, 'domiciliario')
+          .of(pedido.id)
+          .set(null);
+      }
 
       pedido.estado = 2; // tu CANCELADO_TIMEOUT
       (pedido as any).motivo_cancelacion = (motivo || 'Timeout de asignación').slice(0, 160);
@@ -217,6 +254,7 @@ async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
       return true;
     });
   }
+
 
   /** Leer sin excepción */
   async getByIdOrNull(id: number): Promise<Domicilio | null> {
@@ -282,80 +320,80 @@ async getPedidoEnProceso(numeroCliente: string): Promise<Domicilio | null> {
 
 
   // domicilios.service.ts
-async cancelarPorClienteSiNoAsignado(pedidoId: number, motivo: string): Promise<boolean> {
-  return this.dataSource.transaction(async (manager) => {
-    const repo = manager.getRepository(Domicilio);
-    const p = await repo.createQueryBuilder('d')
-      .setLock('pessimistic_write')
-      .where('d.id = :id', { id: pedidoId })
-      .getOne();
-    if (!p) return false;
+  async cancelarPorClienteSiNoAsignado(pedidoId: number, motivo: string): Promise<boolean> {
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Domicilio);
+      const p = await repo.createQueryBuilder('d')
+        .setLock('pessimistic_write')
+        .where('d.id = :id', { id: pedidoId })
+        .getOne();
+      if (!p) return false;
 
-    // Solo dejar cancelar si NO está ASIGNADO (1) ni ENTREGADO/etc.
-    if (![0,5].includes(p.estado)) return false;
+      // Solo dejar cancelar si NO está ASIGNADO (1) ni ENTREGADO/etc.
+      if (![0, 5].includes(p.estado)) return false;
 
-    // Si estaba OFERTADO (5), limpia relación con domi
-    if (p.estado === 5) {
-      await manager.createQueryBuilder()
-        .relation(Domicilio, 'domiciliario')
-        .of(p.id)
-        .set(null);
-    }
+      // Si estaba OFERTADO (5), limpia relación con domi
+      if (p.estado === 5) {
+        await manager.createQueryBuilder()
+          .relation(Domicilio, 'domiciliario')
+          .of(p.id)
+          .set(null);
+      }
 
-    p.estado = 2; // tu estado "CANCELADO"
-    (p as any).motivo_cancelacion = (motivo || 'Cancelación por cliente').slice(0,160);
-    (p as any).fecha_cancelacion = new Date();
+      p.estado = 2; // tu estado "CANCELADO"
+      (p as any).motivo_cancelacion = (motivo || 'Cancelación por cliente').slice(0, 160);
+      (p as any).fecha_cancelacion = new Date();
 
-    await repo.save(p);
-    return true;
-  });
-}
-
-async vaciarTablaYReiniciarIds(): Promise<void> {
-  const qr = this.dataSource.createQueryRunner();
-  await qr.connect();
-  await qr.startTransaction();
-
-  try {
-    const { tableName, schema } = this.domicilioRepo.metadata;
-    const qualified = schema ? `"${schema}"."${tableName}"` : `"${tableName}"`;
-
-    // TRUNCATE en Postgres reinicia el IDENTITY/SEQUENCE automáticamente
-    // CASCADE: cuidado, también vacía tablas que referencien esta.
-    await qr.query(`TRUNCATE TABLE ${qualified} RESTART IDENTITY CASCADE;`);
-
-    await qr.commitTransaction();
-  } catch (e) {
-    await qr.rollbackTransaction();
-    throw e;
-  } finally {
-    await qr.release();
+      await repo.save(p);
+      return true;
+    });
   }
-}
-async marcarEntregadoSiAsignado(pedidoId: number, domiId?: number): Promise<boolean> {
-  return this.dataSource.transaction(async (manager) => {
-    const repo = manager.getRepository(Domicilio);
 
-    const pedido = await repo
-      .createQueryBuilder('d')
-      .setLock('pessimistic_write')
-      .where('d.id = :id', { id: pedidoId })
-      .getOne();
+  async vaciarTablaYReiniciarIds(): Promise<void> {
+    const qr = this.dataSource.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
 
-    if (!pedido) return false;
-    if (pedido.estado !== 1) return false; // debe estar ASIGNADO
+    try {
+      const { tableName, schema } = this.domicilioRepo.metadata;
+      const qualified = schema ? `"${schema}"."${tableName}"` : `"${tableName}"`;
 
-    // (Opcional) verificar domi que cierra coincide con el asignado
-    if (domiId && (pedido as any).id_domiciliario && (pedido as any).id_domiciliario !== domiId) {
-      return false;
+      // TRUNCATE en Postgres reinicia el IDENTITY/SEQUENCE automáticamente
+      // CASCADE: cuidado, también vacía tablas que referencien esta.
+      await qr.query(`TRUNCATE TABLE ${qualified} RESTART IDENTITY CASCADE;`);
+
+      await qr.commitTransaction();
+    } catch (e) {
+      await qr.rollbackTransaction();
+      throw e;
+    } finally {
+      await qr.release();
     }
+  }
+  async marcarEntregadoSiAsignado(pedidoId: number, domiId?: number): Promise<boolean> {
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Domicilio);
 
-    pedido.estado = 7; // ENTREGADO
-    (pedido as any).fecha_entrega = new Date();
-    await repo.save(pedido);
-    return true;
-  });
-}
+      const pedido = await repo
+        .createQueryBuilder('d')
+        .setLock('pessimistic_write')
+        .where('d.id = :id', { id: pedidoId })
+        .getOne();
+
+      if (!pedido) return false;
+      if (pedido.estado !== 1) return false; // debe estar ASIGNADO
+
+      // (Opcional) verificar domi que cierra coincide con el asignado
+      if (domiId && (pedido as any).id_domiciliario && (pedido as any).id_domiciliario !== domiId) {
+        return false;
+      }
+
+      pedido.estado = 7; // ENTREGADO
+      (pedido as any).fecha_entrega = new Date();
+      await repo.save(pedido);
+      return true;
+    });
+  }
 
   async asignarSiPendiente(pedidoId: number, domiId: number): Promise<boolean> {
     const now = new Date();

@@ -238,6 +238,11 @@ export class ChatbotService {
 
       for (const pedido of pendientes) {
 
+        const rechazados = Array.isArray(pedido.domiciliarios_rechazo_ids)
+          ? pedido.domiciliarios_rechazo_ids
+          : null;
+
+
         const numeroClienteFmt = telConMas(toTelKey(pedido.numero_cliente));
 
 
@@ -311,18 +316,25 @@ export class ChatbotService {
             if (zonaIdDeComercio) {
               this.logger.log(`Asignando domiciliario en zona ${zonaIdDeComercio}`);
               try {
-                domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible3(Number(zonaIdDeComercio));
+                domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible3(
+                  Number(zonaIdDeComercio),
+                  rechazados,  // 👈 AQUÍ PASAMOS LOS IDS
+                );
               } catch (e) {
                 this.logger.warn(`⚠️ Sin domiciliarios en zona ${zonaIdDeComercio} para sticker id=${pedido.id}.`);
                 domiciliario = null;
               }
             } else {
               this.logger.warn(`⚠️ Pedido ${pedido.id} sin zona de comercio. Se intentará asignar globalmente.`);
-              domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible2();
+              domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible2(
+                rechazados,  // 👈 AQUÍ TAMBIÉN
+              );
             }
           } else {
             // ✅ Caso NO-STICKER → asignación global
-            domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible2();
+            domiciliario = await this.domiciliarioService.asignarDomiciliarioDisponible2(
+              rechazados,    // 👈 Y AQUÍ
+            );
           }
 
           // ============================
@@ -1768,7 +1780,7 @@ export class ChatbotService {
               body: { text: '¿Seguro que deseas finalizar el pedido?' },
               action: {
                 buttons: [
-                  { type: 'reply', reply: { id: 'fin_domi', title: '✅ Sí, finalizar' } }                ],
+                  { type: 'reply', reply: { id: 'fin_domi', title: '✅ Sí, finalizar' } }],
               },
             },
           });
@@ -3485,203 +3497,203 @@ export class ChatbotService {
   }
 
 
-// ID de la imagen que subiste con /media
-private readonly ID_IMAGEN_SALUDO = '880200348007063';
+  // ID de la imagen que subiste con /media
+  private readonly ID_IMAGEN_SALUDO = '880200348007063';
 
-// Envía saludo con IMAGEN + TEXTO CORTO + 3 BOTONES
-private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
+  // Envía saludo con IMAGEN + TEXTO CORTO + 3 BOTONES
+  private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
 
-  // Texto corto debajo de la imagen
-  const bodyTexto = `👋 Hola ${nombre}, elige tu servicio o pide rápido y fácil en domiciliosw.com`;
+    // Texto corto debajo de la imagen
+    const bodyTexto = `👋 Hola ${nombre}, elige tu servicio o pide rápido y fácil en domiciliosw.com`;
 
-  try {
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: numero,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        header: {
-          type: 'image',
-          image: {
-            id: this.ID_IMAGEN_SALUDO // 👈 TU MEDIA ID AQUÍ
-          }
-        },
-        body: {
-          text: bodyTexto
-        },
-        action: {
-          buttons: [
-            {
-              type: 'reply',
-              reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' }
-            },
-            {
-              type: 'reply',
-              reply: { id: 'opcion_2', title: '🛒 Hacer compra' }
-            },
-            {
-              type: 'reply',
-              reply: { id: 'opcion_3', title: '💰 Hacer pago' }
+    try {
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: numero,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          header: {
+            type: 'image',
+            image: {
+              id: this.ID_IMAGEN_SALUDO // 👈 TU MEDIA ID AQUÍ
             }
-          ]
+          },
+          body: {
+            text: bodyTexto
+          },
+          action: {
+            buttons: [
+              {
+                type: 'reply',
+                reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' }
+              },
+              {
+                type: 'reply',
+                reply: { id: 'opcion_2', title: '🛒 Hacer compra' }
+              },
+              {
+                type: 'reply',
+                reply: { id: 'opcion_3', title: '💰 Hacer pago' }
+              }
+            ]
+          }
         }
-      }
-    });
+      });
 
-    this.logger.log(`✅ Saludo con imagen + texto corto + botones enviado a ${numero}`);
-  } catch (error: any) {
-    this.logger.error(
-      '❌ Error al enviar saludo/botones:',
-      error.response?.data || error.message,
-    );
-  }
-}
-
-
-async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
-  const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_1' };
-
-  // Helpers
-  const trim = (s?: string) => String(s || '').trim();
-  const direccionValida = (txt?: string) => !!trim(txt) && trim(txt).length >= 5;
-
-  // 👉 Teléfono SIEMPRE será el que escribe (WhatsApp)
-  const telefonoFromWa = this.toKey ? this.toKey(numero) : numero;
-
-  // Prompts
-  const pedirDireccionRecogida = async () =>
-    this.enviarMensajeTexto(
-      numero,
-      '🤖 Por favor escribe todo en un solo mensaje⬇️\n\n' +
-      '📍 Dirección de *recogida* y *entrega*'
-    );
-
-  const enviarResumenYBotones = async () => {
-    const { direccionRecoger } = estado.datos;
-    const telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
-
-    await this.enviarMensajeTexto(
-      numero,
-      '✅ Verifica:\n\n' +
-      `📍 Recoger: ${direccionRecoger || '—'}\n` +
-      `📞 Tel: ${telefonoRecoger}`
-    );
-
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: numero,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: {
-          text: '¿Confirmas el pedido? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*',
-        },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
-            { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
-            { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
-          ],
-        },
-      },
-    });
-  };
-
-  switch (estado.paso) {
-    // 0) Iniciar: pedir dirección (tel se toma del número de WhatsApp)
-    case 0: {
-      // Guardamos ya el teléfono desde el número que escribe
-      estado.datos.telefonoRecoger = telefonoFromWa;
-
-      await this.enviarMensajeTexto(numero, '🛵 Tomaremos tus datos de *recogida*.');
-      await pedirDireccionRecogida();
-      estado.paso = 1;
-      break;
+      this.logger.log(`✅ Saludo con imagen + texto corto + botones enviado a ${numero}`);
+    } catch (error: any) {
+      this.logger.error(
+        '❌ Error al enviar saludo/botones:',
+        error.response?.data || error.message,
+      );
     }
+  }
 
-    // 1) Guardar dirección
-    case 1: {
-      const dir = trim(mensaje);
 
-      if (!direccionValida(dir)) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ Dirección inválida. Escribe la dirección de recogida (mín. 5 caracteres).'
-        );
+  async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
+    const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_1' };
+
+    // Helpers
+    const trim = (s?: string) => String(s || '').trim();
+    const direccionValida = (txt?: string) => !!trim(txt) && trim(txt).length >= 5;
+
+    // 👉 Teléfono SIEMPRE será el que escribe (WhatsApp)
+    const telefonoFromWa = this.toKey ? this.toKey(numero) : numero;
+
+    // Prompts
+    const pedirDireccionRecogida = async () =>
+      this.enviarMensajeTexto(
+        numero,
+        '🤖 Por favor escribe todo en un solo mensaje⬇️\n\n' +
+        '📍 Dirección de *recogida* y *entrega*'
+      );
+
+    const enviarResumenYBotones = async () => {
+      const { direccionRecoger } = estado.datos;
+      const telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
+
+      await this.enviarMensajeTexto(
+        numero,
+        '✅ Verifica:\n\n' +
+        `📍 Recoger: ${direccionRecoger || '—'}\n` +
+        `📞 Tel: ${telefonoRecoger}`
+      );
+
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: numero,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: {
+            text: '¿Confirmas el pedido? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*',
+          },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
+              { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
+              { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
+            ],
+          },
+        },
+      });
+    };
+
+    switch (estado.paso) {
+      // 0) Iniciar: pedir dirección (tel se toma del número de WhatsApp)
+      case 0: {
+        // Guardamos ya el teléfono desde el número que escribe
+        estado.datos.telefonoRecoger = telefonoFromWa;
+
+        await this.enviarMensajeTexto(numero, '🛵 Tomaremos tus datos de *recogida*.');
         await pedirDireccionRecogida();
+        estado.paso = 1;
         break;
       }
 
-      estado.datos.direccionRecoger = dir;
-      // Teléfono ya viene del número de WhatsApp
-      estado.datos.telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
+      // 1) Guardar dirección
+      case 1: {
+        const dir = trim(mensaje);
 
-      await enviarResumenYBotones();
-      estado.confirmacionEnviada = true;
-      estado.paso = 3;
-      break;
-    }
+        if (!direccionValida(dir)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Dirección inválida. Escribe la dirección de recogida (mín. 5 caracteres).'
+          );
+          await pedirDireccionRecogida();
+          break;
+        }
 
-    // 3) Correcciones: ahora solo se corrige la dirección, el teléfono siempre es el del chat
-    case 3: {
-      const dir = trim(mensaje);
-      let huboCambio = false;
-
-      if (direccionValida(dir)) {
         estado.datos.direccionRecoger = dir;
-        huboCambio = true;
+        // Teléfono ya viene del número de WhatsApp
+        estado.datos.telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
+
+        await enviarResumenYBotones();
+        estado.confirmacionEnviada = true;
+        estado.paso = 3;
+        break;
       }
 
-      // El teléfono SIEMPRE se mantiene como el de WhatsApp
-      estado.datos.telefonoRecoger = telefonoFromWa;
+      // 3) Correcciones: ahora solo se corrige la dirección, el teléfono siempre es el del chat
+      case 3: {
+        const dir = trim(mensaje);
+        let huboCambio = false;
 
-      if (huboCambio) {
-        await this.enviarMensajeTexto(
-          numero,
-          '✍️ Actualizado:\n\n' +
-          `📍 Recoger: ${estado.datos.direccionRecoger}\n` +
-          `📞 Tel: ${estado.datos.telefonoRecoger}`
-        );
+        if (direccionValida(dir)) {
+          estado.datos.direccionRecoger = dir;
+          huboCambio = true;
+        }
 
-        try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: numero,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: {
-                text: '¿Deseas confirmar ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*',
+        // El teléfono SIEMPRE se mantiene como el de WhatsApp
+        estado.datos.telefonoRecoger = telefonoFromWa;
+
+        if (huboCambio) {
+          await this.enviarMensajeTexto(
+            numero,
+            '✍️ Actualizado:\n\n' +
+            `📍 Recoger: ${estado.datos.direccionRecoger}\n` +
+            `📞 Tel: ${estado.datos.telefonoRecoger}`
+          );
+
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: {
+                  text: '¿Deseas confirmar ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*',
+                },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
+                    { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
+                    { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
+                  ],
+                },
               },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
-                  { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
-                  { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
-                ],
-              },
-            },
-          });
-        } catch { }
-      } else {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No pude detectar cambios válidos en la dirección. Escribe la nueva dirección de recogida.'
-        );
+            });
+          } catch { }
+        } else {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No pude detectar cambios válidos en la dirección. Escribe la nueva dirección de recogida.'
+          );
+        }
+        break;
       }
-      break;
+
+      default: {
+        estadoUsuarios.delete(numero);
+        await this.opcion1PasoAPaso(numero, '');
+        return;
+      }
     }
 
-    default: {
-      estadoUsuarios.delete(numero);
-      await this.opcion1PasoAPaso(numero, '');
-      return;
-    }
+    estadoUsuarios.set(numero, estado);
   }
-
-  estadoUsuarios.set(numero, estado);
-}
 
 
 
@@ -3691,302 +3703,302 @@ async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
   // - Evita reenvíos duplicados del resumen en una ventana corta (30s)
 
   async opcion2PasoAPaso(numero: string, mensaje: string): Promise<void> {
-  // 👉 Teléfono SIEMPRE será el del WhatsApp que escribe
-  const telefonoFromWa = this.toKey ? this.toKey(numero) : numero;
+    // 👉 Teléfono SIEMPRE será el del WhatsApp que escribe
+    const telefonoFromWa = this.toKey ? this.toKey(numero) : numero;
 
-  const estado = estadoUsuarios.get(numero) || {
-    paso: 0,
-    datos: {} as any,
-    tipo: 'opcion_2',
-  };
+    const estado = estadoUsuarios.get(numero) || {
+      paso: 0,
+      datos: {} as any,
+      tipo: 'opcion_2',
+    };
 
-  const txt = (mensaje ?? '').toString().trim();
+    const txt = (mensaje ?? '').toString().trim();
 
-  // Ventana anti-duplicados (30s)
-  const RESUMEN_GUARD_MS = 30_000;
+    // Ventana anti-duplicados (30s)
+    const RESUMEN_GUARD_MS = 30_000;
 
-  switch (estado.paso) {
-    case 0: {
-      // Guardamos ya el teléfono desde el número que escribe
-      estado.datos.telefonoEntrega = telefonoFromWa;
+    switch (estado.paso) {
+      case 0: {
+        // Guardamos ya el teléfono desde el número que escribe
+        estado.datos.telefonoEntrega = telefonoFromWa;
 
-      await this.enviarMensajeTexto(
-        numero,
-        [
-          '🛒 *Para tu compra envíame todo en un solo ✍ mensaje:*',
-          '',
-          '✅ Lista y cantidad de productos',
-          '✅ Lugar de preferencia (tienda, supermercado, etc.)',
-          '',
-          '📍 Dirección de entrega',
-        ].join('\n')
-      );
-      estado.paso = 1;
-      break;
-    }
-
-    case 1: {
-      const detalle = txt || '(sin detalle)';
-
-      // 🛡️ Idempotencia: si ya mostramos resumen para el mismo detalle hace <30s, no repitas
-      if (
-        estado._ultimoResumen === detalle &&
-        typeof estado._ultimoResumenTs === 'number' &&
-        Date.now() - estado._ultimoResumenTs < RESUMEN_GUARD_MS
-      ) {
+        await this.enviarMensajeTexto(
+          numero,
+          [
+            '🛒 *Para tu compra envíame todo en un solo ✍ mensaje:*',
+            '',
+            '✅ Lista y cantidad de productos',
+            '✅ Lugar de preferencia (tienda, supermercado, etc.)',
+            '',
+            '📍 Dirección de entrega',
+          ].join('\n')
+        );
+        estado.paso = 1;
         break;
       }
 
-      // Guardar TAL CUAL el mensaje en listaCompras
-      estado.datos.listaCompras = detalle;
+      case 1: {
+        const detalle = txt || '(sin detalle)';
 
-      // Dirección opcional; si luego la quieres parsear, lo haces en otra parte
-      estado.datos.direccionEntrega = 'Incluida en el detalle';
-      // Teléfono SIEMPRE el del WhatsApp
-      estado.datos.telefonoEntrega = telefonoFromWa;
+        // 🛡️ Idempotencia: si ya mostramos resumen para el mismo detalle hace <30s, no repitas
+        if (
+          estado._ultimoResumen === detalle &&
+          typeof estado._ultimoResumenTs === 'number' &&
+          Date.now() - estado._ultimoResumenTs < RESUMEN_GUARD_MS
+        ) {
+          break;
+        }
 
-      // Resumen
-      await this.enviarMensajeTexto(
-        numero,
-        [
-          '✅ *Revisa tu pedido:*',
-          '',
-          '🛒 *Detalle completo (lista + dirección):*',
-          detalle,
-          '',
-          `📞 Teléfono de contacto: ${estado.datos.telefonoEntrega}`,
-        ].join('\n')
-      );
+        // Guardar TAL CUAL el mensaje en listaCompras
+        estado.datos.listaCompras = detalle;
 
-      // 🔘 Botones (títulos ≤ 20 chars para evitar 131009)
-      try {
-        await axiosWhatsapp.post(
-          '/messages',
-          {
-            messaging_product: 'whatsapp',
-            to: numero,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '¿Confirmas el pedido?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Confirmar' } },
-                  { type: 'reply', reply: { id: 'editar_compra', title: '🔁 Editar' } },
-                  { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
-                ],
+        // Dirección opcional; si luego la quieres parsear, lo haces en otra parte
+        estado.datos.direccionEntrega = 'Incluida en el detalle';
+        // Teléfono SIEMPRE el del WhatsApp
+        estado.datos.telefonoEntrega = telefonoFromWa;
+
+        // Resumen
+        await this.enviarMensajeTexto(
+          numero,
+          [
+            '✅ *Revisa tu pedido:*',
+            '',
+            '🛒 *Detalle completo (lista + dirección):*',
+            detalle,
+            '',
+            `📞 Teléfono de contacto: ${estado.datos.telefonoEntrega}`,
+          ].join('\n')
+        );
+
+        // 🔘 Botones (títulos ≤ 20 chars para evitar 131009)
+        try {
+          await axiosWhatsapp.post(
+            '/messages',
+            {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Confirmas el pedido?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Confirmar' } },
+                    { type: 'reply', reply: { id: 'editar_compra', title: '🔁 Editar' } },
+                    { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
+                  ],
+                },
               },
             },
-          },
-          { timeout: 7000 },
-        );
-      } catch (e: any) {
-        this.logger.warn(
-          `⚠️ Falló envío de botones compra: ${e?.response?.data?.error?.message || e?.message || e}`
-        );
+            { timeout: 7000 },
+          );
+        } catch (e: any) {
+          this.logger.warn(
+            `⚠️ Falló envío de botones compra: ${e?.response?.data?.error?.message || e?.message || e}`
+          );
+        }
+
+        // Marca anti-duplicados
+        estado._ultimoResumen = detalle;
+        estado._ultimoResumenTs = Date.now();
+
+        break;
       }
 
-      // Marca anti-duplicados
-      estado._ultimoResumen = detalle;
-      estado._ultimoResumenTs = Date.now();
-
-      break;
+      default: {
+        // Reinicio suave si algo se desordenó
+        estadoUsuarios.delete(numero);
+        await this.opcion2PasoAPaso(numero, '');
+        return;
+      }
     }
 
-    default: {
-      // Reinicio suave si algo se desordenó
-      estadoUsuarios.delete(numero);
-      await this.opcion2PasoAPaso(numero, '');
-      return;
-    }
+    estadoUsuarios.set(numero, estado);
   }
 
-  estadoUsuarios.set(numero, estado);
-}
 
 
 
 
 
+  async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
+    const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
 
- async opcion3PasoAPaso(numero: string, mensaje: string): Promise<void> {
-  const estado = estadoUsuarios.get(numero) || { paso: 0, datos: {}, tipo: 'opcion_3' };
+    // 👉 Teléfono SIEMPRE será el del WhatsApp que escribe
+    const telefonoFromWa = this.toKey ? this.toKey(numero) : numero;
 
-  // 👉 Teléfono SIEMPRE será el del WhatsApp que escribe
-  const telefonoFromWa = this.toKey ? this.toKey(numero) : numero;
+    // Helpers
+    const trim = (s?: string) => String(s || '').trim();
+    const direccionValida = (txt?: string) => !!trim(txt) && trim(txt).length >= 5;
 
-  // Helpers
-  const trim = (s?: string) => String(s || '').trim();
-  const direccionValida = (txt?: string) => !!trim(txt) && trim(txt).length >= 5;
+    // Prompts
+    const pedirDirRecoger = async () =>
+      this.enviarMensajeTexto(
+        numero,
+        '📍 Ingresa la dirección de *RECOGER*.\n\n' +
+        '👉 Puedes escribir referencia o detalles adicionales en el mismo mensaje.\n\n'
+      );
 
-  // Prompts
-  const pedirDirRecoger = async () =>
-    this.enviarMensajeTexto(
-      numero,
-      '📍 Ingresa la dirección de *RECOGER*.\n\n' +
-      '👉 Puedes escribir referencia o detalles adicionales en el mismo mensaje.\n\n'
-    );
-
-  const enviarResumenYBotones = async () => {
-    const { direccionRecoger } = estado.datos;
-    const telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
-
-    await this.enviarMensajeTexto(
-      numero,
-      '✅ Verifica:\n\n' +
-      `📍 Recoger: ${direccionRecoger || '—'}\n` +
-      `📞 Tel: ${telefonoRecoger}`
-    );
-
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: numero,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: '¿Es correcto? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
-            { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
-            { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
-          ],
-        },
-      },
-    });
-  };
-
-  switch (estado.paso) {
-    // 0) Inicio: explicamos y pedimos dirección. Tel se toma del WhatsApp.
-    case 0: {
-      // Guardamos teléfono desde el número del chat
-      estado.datos.telefonoRecoger = telefonoFromWa;
-      estado.datos.telefonoRecogida = telefonoFromWa; // compat, por si en otro lado usas este campo
+    const enviarResumenYBotones = async () => {
+      const { direccionRecoger } = estado.datos;
+      const telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
 
       await this.enviarMensajeTexto(
         numero,
-        '💰 Vamos a recoger dinero/facturas.\n' +
-        '📍 Envíame la *dirección de RECOGER*.\n\n' +
-        '👉 Puedes escribir en un solo mensaje la dirección y alguna referencia.\n\n' +
-        '🔐 Si el pago supera 200.000, escribe al 314 242 3130.'
+        '✅ Verifica:\n\n' +
+        `📍 Recoger: ${direccionRecoger || '—'}\n` +
+        `📞 Tel: ${telefonoRecoger}`
       );
-      estado.paso = 1;
-      break;
-    }
 
-    // 1) Guardar dirección y mostrar resumen
-    case 1: {
-      const dir = trim(mensaje);
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: numero,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: '¿Es correcto? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
+              { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
+              { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
+            ],
+          },
+        },
+      });
+    };
 
-      if (!direccionValida(dir)) {
+    switch (estado.paso) {
+      // 0) Inicio: explicamos y pedimos dirección. Tel se toma del WhatsApp.
+      case 0: {
+        // Guardamos teléfono desde el número del chat
+        estado.datos.telefonoRecoger = telefonoFromWa;
+        estado.datos.telefonoRecogida = telefonoFromWa; // compat, por si en otro lado usas este campo
+
         await this.enviarMensajeTexto(
           numero,
-          '⚠️ Dirección inválida. Escribe una *dirección válida* (mín. 5 caracteres).'
+          '💰 Vamos a recoger dinero/facturas.\n' +
+          '📍 Envíame la *dirección de RECOGER*.\n\n' +
+          '👉 Puedes escribir en un solo mensaje la dirección y alguna referencia.\n\n' +
+          '🔐 Si el pago supera 200.000, escribe al 314 242 3130.'
         );
-        await pedirDirRecoger();
+        estado.paso = 1;
         break;
       }
 
-      estado.datos.direccionRecoger = dir;
-      estado.datos.direccionRecogida = dir;
+      // 1) Guardar dirección y mostrar resumen
+      case 1: {
+        const dir = trim(mensaje);
 
-      // Aseguramos teléfono desde WhatsApp por si acaso
-      estado.datos.telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
-      estado.datos.telefonoRecogida = estado.datos.telefonoRecogida || telefonoFromWa;
+        if (!direccionValida(dir)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Dirección inválida. Escribe una *dirección válida* (mín. 5 caracteres).'
+          );
+          await pedirDirRecoger();
+          break;
+        }
 
-      await enviarResumenYBotones();
-      estado.confirmacionEnviada = true;
-      estado.paso = 3;
-      break;
-    }
-
-    // 2) (por compatibilidad) si alguien deja al estado en 2, lo tratamos igual que el 1
-    case 2: {
-      const dir = trim(mensaje);
-
-      if (!direccionValida(dir)) {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ Dirección inválida. Escribe una *dirección válida* (mín. 5 caracteres).'
-        );
-        await pedirDirRecoger();
-        break;
-      }
-
-      estado.datos.direccionRecoger = dir;
-      estado.datos.direccionRecogida = dir;
-      estado.datos.telefonoRecoger = telefonoFromWa;
-      estado.datos.telefonoRecogida = telefonoFromWa;
-
-      await enviarResumenYBotones();
-      estado.confirmacionEnviada = true;
-      estado.paso = 3;
-      break;
-    }
-
-    // 3) Correcciones rápidas: solo se corrige dirección; el teléfono siempre es el del chat
-    case 3: {
-      if (!trim(mensaje)) break;
-
-      const dir = trim(mensaje);
-      let huboCambio = false;
-
-      if (direccionValida(dir)) {
         estado.datos.direccionRecoger = dir;
         estado.datos.direccionRecogida = dir;
-        huboCambio = true;
+
+        // Aseguramos teléfono desde WhatsApp por si acaso
+        estado.datos.telefonoRecoger = estado.datos.telefonoRecoger || telefonoFromWa;
+        estado.datos.telefonoRecogida = estado.datos.telefonoRecogida || telefonoFromWa;
+
+        await enviarResumenYBotones();
+        estado.confirmacionEnviada = true;
+        estado.paso = 3;
+        break;
       }
 
-      // Tel SIEMPRE el de WhatsApp
-      estado.datos.telefonoRecoger = telefonoFromWa;
-      estado.datos.telefonoRecogida = telefonoFromWa;
+      // 2) (por compatibilidad) si alguien deja al estado en 2, lo tratamos igual que el 1
+      case 2: {
+        const dir = trim(mensaje);
 
-      if (huboCambio) {
-        await this.enviarMensajeTexto(
-          numero,
-          '✍️ Actualizado:\n\n' +
-          `📍 Recoger: ${estado.datos.direccionRecoger}\n` +
-          `📞 Tel: ${estado.datos.telefonoRecoger}`
-        );
+        if (!direccionValida(dir)) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ Dirección inválida. Escribe una *dirección válida* (mín. 5 caracteres).'
+          );
+          await pedirDirRecoger();
+          break;
+        }
 
-        // Reenviar botones por comodidad
-        try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: numero,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '¿Es correcto ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
-                  { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
-                  { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
-                ],
+        estado.datos.direccionRecoger = dir;
+        estado.datos.direccionRecogida = dir;
+        estado.datos.telefonoRecoger = telefonoFromWa;
+        estado.datos.telefonoRecogida = telefonoFromWa;
+
+        await enviarResumenYBotones();
+        estado.confirmacionEnviada = true;
+        estado.paso = 3;
+        break;
+      }
+
+      // 3) Correcciones rápidas: solo se corrige dirección; el teléfono siempre es el del chat
+      case 3: {
+        if (!trim(mensaje)) break;
+
+        const dir = trim(mensaje);
+        let huboCambio = false;
+
+        if (direccionValida(dir)) {
+          estado.datos.direccionRecoger = dir;
+          estado.datos.direccionRecogida = dir;
+          huboCambio = true;
+        }
+
+        // Tel SIEMPRE el de WhatsApp
+        estado.datos.telefonoRecoger = telefonoFromWa;
+        estado.datos.telefonoRecogida = telefonoFromWa;
+
+        if (huboCambio) {
+          await this.enviarMensajeTexto(
+            numero,
+            '✍️ Actualizado:\n\n' +
+            `📍 Recoger: ${estado.datos.direccionRecoger}\n` +
+            `📞 Tel: ${estado.datos.telefonoRecoger}`
+          );
+
+          // Reenviar botones por comodidad
+          try {
+            await axiosWhatsapp.post('/messages', {
+              messaging_product: 'whatsapp',
+              to: numero,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Es correcto ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
+                    { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
+                    { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
+                  ],
+                },
               },
-            },
-          });
-        } catch { }
-      } else {
-        await this.enviarMensajeTexto(
-          numero,
-          '⚠️ No detecté cambios válidos. Escribe la nueva *dirección de RECOGER*.'
-        );
+            });
+          } catch { }
+        } else {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No detecté cambios válidos. Escribe la nueva *dirección de RECOGER*.'
+          );
+        }
+        break;
       }
-      break;
+
+      default: {
+        await this.enviarMensajeTexto(numero, '❗ Reiniciaremos el proceso.');
+        estadoUsuarios.delete(numero);
+        await this.opcion3PasoAPaso(numero, '');
+        return;
+      }
     }
 
-    default: {
-      await this.enviarMensajeTexto(numero, '❗ Reiniciaremos el proceso.');
-      estadoUsuarios.delete(numero);
-      await this.opcion3PasoAPaso(numero, '');
-      return;
-    }
+    estadoUsuarios.set(numero, estado);
   }
-
-  estadoUsuarios.set(numero, estado);
-}
 
 
 

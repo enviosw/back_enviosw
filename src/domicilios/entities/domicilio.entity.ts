@@ -84,4 +84,11 @@ export class Domicilio {
 
   @Column({ type: 'varchar', length: 160, nullable: true })
   motivo_cancelacion: string | null;
+
+  @Column('int', {
+    array: true,
+    nullable: true,
+    default: () => 'ARRAY[]::int[]'
+  })
+  domiciliarios_rechazo_ids: number[];
 }

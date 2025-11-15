@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsDateString, Length } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsDateString, Length, IsArray } from 'class-validator';
 
 export class CreateDomicilioDto {
     @IsString()
@@ -70,4 +70,10 @@ export class CreateDomicilioDto {
     @IsString()
     @Length(0, 160)
     motivo_cancelacion?: string;
+
+    @IsOptional()
+    @IsArray()
+    @IsInt({ each: true })   // Valida que cada elemento del array sea un int
+    domiciliarios_rechazo_ids?: number[];
+
 }
