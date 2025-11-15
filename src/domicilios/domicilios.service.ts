@@ -158,40 +158,38 @@ export class DomiciliosService {
   }
 
   /**
-   * OFERTADO (5) -> PENDIENTE (0), limpia la relación "domiciliario".
-   * Devuelve true si realmente estaba ofertado y se revirtió.
-   */
+  * OFERTADO (5) -> PENDIENTE (0), limpia la relación "domiciliario".
+  * Devuelve true si realmente estaba ofertado y se revirtió.
+  */
   async volverAPendienteSiOfertado(pedidoId: number): Promise<boolean> {
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(Domicilio);
 
-      // Bloquea el registro del pedido y trae también el domiciliario
+      // 🔒 Bloquea SOLO la fila de domicilios, sin LEFT JOIN
       const pedido = await repo
         .createQueryBuilder('d')
-        .leftJoinAndSelect('d.domiciliario', 'domi')
-        .setLock('pessimistic_write')
+        .setLock('pessimistic_write')   // 👈 solo un argumento, ya no da error de overload
         .where('d.id = :id', { id: pedidoId })
         .getOne();
 
       if (!pedido) return false;
       if (pedido.estado !== 5) return false; // ya no está OFERTADO
 
-      // 👇 ID del domiciliario que tenía la oferta
-      const domiId = pedido.domiciliario?.id ?? null;
+      // 👇 Obtenemos el ID del domi desde la FK física "id_domiciliario"
+      const domiId = (pedido as any).id_domiciliario ?? null;
 
-      // 👇 Acá registramos el rechazo en el array domiciliarios_rechazo_ids
+      // 👇 Registramos el ID en el array de rechazados
       if (domiId) {
         const actuales = Array.isArray(pedido.domiciliarios_rechazo_ids)
           ? pedido.domiciliarios_rechazo_ids
           : [];
 
         if (!actuales.includes(domiId)) {
-          // sumamos el id al array (sin duplicar)
           pedido.domiciliarios_rechazo_ids = [...actuales, domiId];
         }
       }
 
-      // 1) Limpia la relación mediante RelationQueryBuilder
+      // 1) Limpia la relación con el domiciliario
       await manager
         .createQueryBuilder()
         .relation(Domicilio, 'domiciliario')
@@ -201,7 +199,6 @@ export class DomiciliosService {
       // 2) Actualiza el resto de campos
       pedido.estado = 0; // PENDIENTE
       (pedido as any).fecha_asignacion = null;
-      // puedes cambiar el texto si quieres diferenciar rechazo vs no respuesta
       (pedido as any).motivo_cancelacion = 'Rechazado por domiciliario';
       (pedido as any).fecha_cancelacion = null;
 
@@ -209,6 +206,7 @@ export class DomiciliosService {
       return true;
     });
   }
+
 
   /**
    * Cancela por timeout SOLO si sigue PENDIENTE (0).
@@ -219,16 +217,15 @@ export class DomiciliosService {
 
       const pedido = await repo
         .createQueryBuilder('d')
-        .leftJoinAndSelect('d.domiciliario', 'domi') // 👈 traemos también el domi
-        .setLock('pessimistic_write')
+        .setLock('pessimistic_write') // 🔒 solo domicilios, sin LEFT JOIN
         .where('d.id = :id', { id: pedidoId })
         .getOne();
 
       if (!pedido) return false;
       if (pedido.estado !== 0) return false; // ya no está pendiente
 
-      // 👇 Si hay un domiciliario asignado al momento del timeout, lo guardamos como "rechazo"
-      const domiId = pedido.domiciliario?.id ?? null;
+      // 👇 Si hay un domiciliario asociado al momento del timeout, lo guardamos como "rechazo"
+      const domiId = (pedido as any).id_domiciliario ?? null;
       if (domiId) {
         const actuales = Array.isArray(pedido.domiciliarios_rechazo_ids)
           ? pedido.domiciliarios_rechazo_ids
@@ -254,7 +251,6 @@ export class DomiciliosService {
       return true;
     });
   }
-
 
   /** Leer sin excepción */
   async getByIdOrNull(id: number): Promise<Domicilio | null> {

@@ -85,6 +85,9 @@ export class Domicilio {
   @Column({ type: 'varchar', length: 160, nullable: true })
   motivo_cancelacion: string | null;
 
+  @Column({ name: 'id_domiciliario', type: 'int', nullable: true })
+  id_domiciliario: number | null;
+
   @Column('int', {
     array: true,
     nullable: true,
