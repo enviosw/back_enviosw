@@ -58,148 +58,147 @@ export class DomiciliariosService {
   }
 
   async asignarDomiciliarioDisponible3(
-    zonaId: number,
-    excluirIds?: number[] | null,
-  ): Promise<Domiciliario | null> {
-    console.log(`Asignando domiciliario en zona ${zonaId}`);
-    return this.dataSource.transaction(async (manager) => {
-      const repo = manager.getRepository(Domiciliario);
+  zonaId: number,
+  excluirIds?: number[] | null,
+): Promise<Domiciliario | null> {
+  console.log(`Asignando domiciliario en zona ${zonaId}`);
+  return this.dataSource.transaction(async (manager) => {
+    const repo = manager.getRepository(Domiciliario);
 
-      // Normalizamos el arreglo de IDs a excluir (puede venir null/undefined)
-      const idsExcluidos = Array.isArray(excluirIds)
-        ? excluirIds.filter((id) => id != null)
-        : [];
+    const idsExcluidos = Array.isArray(excluirIds)
+      ? excluirIds.filter((id) => id != null)
+      : [];
 
-      // ---- 1) Buscar en la zona solicitada ----
-      let qbZona = repo
+    // ---- 1) Buscar en la zona solicitada ----
+    let qbZona = repo
+      .createQueryBuilder('d')
+      .where('d.estado = :activo', { activo: true })
+      .andWhere('d.disponible = :disp', { disp: true })
+      .andWhere('d.zona_id = :zonaId', { zonaId });
+
+    if (idsExcluidos.length > 0) {
+      qbZona = qbZona.andWhere('d.id NOT IN (:...idsExcluidos)', { idsExcluidos });
+    }
+
+    let domi = await qbZona
+      .orderBy('d.turno_orden', 'ASC')
+      .addOrderBy('d.id', 'ASC')
+      .setLock('pessimistic_write')
+      .getOne();
+
+    // ---- 2) Si no hay en esa zona, intentar en cualquier otra ----
+    let fueraDeZona = false;
+    if (!domi) {
+      console.log(`No hay domiciliarios disponibles en zona ${zonaId}. Buscando en otras zonas...`);
+
+      let qbGlobal = repo
         .createQueryBuilder('d')
         .where('d.estado = :activo', { activo: true })
-        .andWhere('d.disponible = :disp', { disp: true })
-        .andWhere('d.zona_id = :zonaId', { zonaId });
+        .andWhere('d.disponible = :disp', { disp: true });
 
-      // 👇 si hay ids excluidos, no los tengas en cuenta en la zona
       if (idsExcluidos.length > 0) {
-        qbZona = qbZona.andWhere('d.id NOT IN (:...idsExcluidos)', { idsExcluidos });
+        qbGlobal = qbGlobal.andWhere('d.id NOT IN (:...idsExcluidos)', { idsExcluidos });
       }
 
-      let domi = await qbZona
+      domi = await qbGlobal
         .orderBy('d.turno_orden', 'ASC')
         .addOrderBy('d.id', 'ASC')
         .setLock('pessimistic_write')
         .getOne();
 
-      // ---- 2) Si no hay en esa zona, intentar en cualquier otra ----
-      let fueraDeZona = false;
-      if (!domi) {
-        console.log(`No hay domiciliarios disponibles en zona ${zonaId}. Buscando en otras zonas...`);
+      if (domi) fueraDeZona = true;
+    }
 
-        let qbGlobal = repo
-          .createQueryBuilder('d')
-          .where('d.estado = :activo', { activo: true })
-          .andWhere('d.disponible = :disp', { disp: true });
+    if (!domi) {
+      console.log(`⚠️  No hay domiciliarios disponibles en ninguna zona (aplicando exclusiones).`);
+      return null;
+    }
 
-        // 👇 también excluimos IDs en la búsqueda global
-        if (idsExcluidos.length > 0) {
-          qbGlobal = qbGlobal.andWhere('d.id NOT IN (:...idsExcluidos)', { idsExcluidos });
-        }
+    // ---- 4) Intentar marcarlo como no disponible ----
+    const res = await repo
+      .createQueryBuilder()
+      .update(Domiciliario)
+      .set({ disponible: false })
+      .where('id = :id', { id: domi.id })
+      .andWhere('disponible = true')
+      .andWhere('estado = true')
+      .execute();
 
-        domi = await qbGlobal
-          .orderBy('d.turno_orden', 'ASC')
-          .addOrderBy('d.id', 'ASC')
-          .setLock('pessimistic_write')
-          .getOne();
+    // ---- 5) Si no se pudo actualizar, abortar sin asignar ----
+    if (!res.affected) {
+      console.log(`⚠️  Domiciliario ${domi.id} ya no estaba disponible (carrera perdida).`);
+      return null;
+    }
 
-        if (domi) fueraDeZona = true;
-      }
+    // ---- 6) Devolver registro actualizado ----
+    const actualizado = await repo.findOne({ where: { id: domi.id } });
+    if (!actualizado) {
+      console.log(`⚠️  No fue posible cargar el domiciliario actualizado.`);
+      return null;
+    }
 
-      // ---- 3) Si sigue sin haber nadie disponible, no hacer nada ----
-      if (!domi) {
-        console.log(`⚠️  No hay domiciliarios disponibles en ninguna zona (aplicando exclusiones).`);
-        return null;
-      }
+    if (fueraDeZona) {
+      console.log(
+        `Domiciliario ${actualizado.id} asignado FUERA de la zona solicitada (zona original ${zonaId}, asignada ${actualizado.zona_id}).`,
+      );
+      (actualizado as any).__fueraDeZona = true; // marcador temporal
+    }
 
-      // ---- 4) Intentar marcarlo como no disponible ----
-      const res = await repo
-        .createQueryBuilder()
-        .update(Domiciliario)
-        .set({ disponible: false })
-        .where('id = :id', { id: domi.id })
-        .andWhere('disponible = true')
-        .andWhere('estado = true')
-        .execute();
-
-      // ---- 5) Si no se pudo actualizar, abortar sin asignar ----
-      if (!res.affected) {
-        console.log(`⚠️  Domiciliario ${domi.id} ya no estaba disponible.`);
-        return null;
-      }
-
-      // ---- 6) Devolver registro actualizado ----
-      const actualizado = await repo.findOne({ where: { id: domi.id } });
-      if (!actualizado) {
-        console.log(`⚠️  No fue posible cargar el domiciliario actualizado.`);
-        return null;
-      }
-
-      if (fueraDeZona) {
-        console.log(
-          `Domiciliario ${actualizado.id} asignado FUERA de la zona solicitada (zona original ${zonaId}, asignada ${actualizado.zona_id}).`,
-        );
-        (actualizado as any).__fueraDeZona = true; // marcador temporal
-      }
-
-      return actualizado;
-    });
-  }
+    return actualizado;
+  });
+}
 
 
+async asignarDomiciliarioDisponible2(excluirIds?: number[] | null): Promise<Domiciliario> {
+  return this.dataSource.transaction(async (manager) => {
+    const repo = manager.getRepository(Domiciliario);
 
-  // ✅ Toma el siguiente disponible SIN mover turno_orden,
-  //    excluyendo opcionalmente una lista de IDs de domiciliarios
-  async asignarDomiciliarioDisponible2(excluirIds?: number[] | null): Promise<Domiciliario> {
-    return this.dataSource.transaction(async (manager) => {
-      const repo = manager.getRepository(Domiciliario);
+    const idsExcluidos = Array.isArray(excluirIds)
+      ? excluirIds.filter((id) => id != null)
+      : [];
 
-      // Normalizamos el arreglo de IDs a excluir (puede venir null/undefined)
-      const idsExcluidos = Array.isArray(excluirIds)
-        ? excluirIds.filter((id) => id != null)
-        : [];
+    const qb = repo
+      .createQueryBuilder('d')
+      .where('d.estado = :activo AND d.disponible = :disp', { activo: true, disp: true });
 
-      // Toma el primero por turno, pero NO cambia su turno_orden
-      const qb = repo
-        .createQueryBuilder('d')
-        .where('d.estado = :activo AND d.disponible = :disp', { activo: true, disp: true });
+    if (idsExcluidos.length > 0) {
+      qb.andWhere('d.id NOT IN (:...idsExcluidos)', { idsExcluidos });
+    }
 
-      // 👇 Si hay IDs a excluir, los filtramos del query
-      if (idsExcluidos.length > 0) {
-        qb.andWhere('d.id NOT IN (:...idsExcluidos)', { idsExcluidos });
-      }
+    const domi = await qb
+      .orderBy('d.turno_orden', 'ASC')
+      .addOrderBy('d.id', 'ASC')
+      .setLock('pessimistic_write')
+      .getOne();
 
-      const domi = await qb
-        .orderBy('d.turno_orden', 'ASC')
-        .addOrderBy('d.id', 'ASC')
-        .setLock('pessimistic_write')
-        .getOne();
+    if (!domi) {
+      throw new NotFoundException('No hay domiciliarios disponibles en este momento.');
+    }
 
-      if (!domi) {
-        throw new NotFoundException('No hay domiciliarios disponibles en este momento.');
-      }
+    // ⛔ AQUÍ ESTABA EL PROBLEMA: hay que revisar si realmente lo logramos marcar como no disponible
+    const res = await repo
+      .createQueryBuilder()
+      .update(Domiciliario)
+      .set({ disponible: false })
+      .where('id = :id', { id: domi.id })
+      .andWhere('disponible = true')
+      .andWhere('estado = true')
+      .execute();
 
-      // Solo lo pone como NO disponible (no mueve el turno)
-      await repo
-        .createQueryBuilder()
-        .update(Domiciliario)
-        .set({ disponible: false })
-        .where('id = :id AND disponible = true AND estado = true', { id: domi.id })
-        .execute();
+    // Si res.affected === 0, otro flujo ganó la carrera y puso el domi como NO disponible antes.
+    if (!res.affected) {
+      // Puedes decidir si lanzar o devolver algo especial; lo importante es NO tratarlo como asignado.
+      throw new NotFoundException('El domiciliario ya no estaba disponible (carrera con otro flujo).');
+    }
 
-      const actualizado = await repo.findOne({ where: { id: domi.id } });
-      if (!actualizado) {
-        throw new NotFoundException('No fue posible actualizar el domiciliario seleccionado.');
-      }
-      return actualizado;
-    });
-  }
+    const actualizado = await repo.findOne({ where: { id: domi.id } });
+    if (!actualizado) {
+      throw new NotFoundException('No fue posible actualizar el domiciliario seleccionado.');
+    }
+
+    return actualizado;
+  });
+}
 
 
   // async asignarDomiciliarioDisponible3(zonaId: number): Promise<Domiciliario | null> {

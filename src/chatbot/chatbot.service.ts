@@ -182,7 +182,7 @@ export class ChatbotService {
 
 
 
-  @Interval(45000) // cada 45s
+  @Interval(60000) // cada 50s
   async reintentarAsignacionPendientes(): Promise<void> {
     // --- helpers locales ---
     const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
@@ -3498,7 +3498,7 @@ export class ChatbotService {
 
 
   // ID de la imagen que subiste con /media
-  private readonly ID_IMAGEN_SALUDO = '880200348007063';  //ejemplo 686382684258783
+  private readonly ID_IMAGEN_SALUDO = '686382684258783';  //ejemplo 686382684258783  Reak: 880200348007063
 
   // Envía saludo con IMAGEN + TEXTO CORTO + 3 BOTONES
   private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
