@@ -1314,10 +1314,13 @@ export class ChatbotService {
 
           estadoUsuarios.set(key, stLocal);
 
-          await this.enviarMensajeTexto(
-            numero,
-            '💰 *Escribe el valor total cobrado al cliente* (ej: 15000, $ 15.000 o 12.500).'
-          );
+       await this.enviarMensajeTexto(
+  numero,
+  '💰 *Escribe el valor total cobrado al cliente* (ej: 15000, $15.000 o 12.500).\n\n' +
+  'Si el domicilio fue *cancelado por el cliente*, escribe **0** como valor.\n' +
+  'Recuerda conservar la evidencia de la cancelación (mensaje o soporte del cliente).'
+);
+
           return; // detenemos para no caer en otros handlers
         }
       }
@@ -2625,10 +2628,13 @@ export class ChatbotService {
         st.conversacionId = conversacionId;
         estadoUsuarios.set(numero, st);
 
-        await this.enviarMensajeTexto(
-          numero,
-          '📍 Escribe el restaurante, local o barrio de Recogida'
-        );
+      await this.enviarMensajeTexto(
+  numero,
+  '📍 Indica el restaurante, local o barrio de *Recogida*.\n\n' +
+  'Si el domicilio fue *cancelado*, escribe un mensaje explicando el motivo y coloca **0** en el precio.\n' +
+  'Debes contar con un soporte que confirme la cancelación (por ejemplo, un mensaje del cliente).'
+);
+
         return;
       }
 
