@@ -1341,10 +1341,10 @@ export class ChatbotService {
         }
 
         // ✅ Validación de mínimo
-        if (monto < 5000) {
+        if (monto !== 0 && monto < 5000) {
           await this.enviarMensajeTexto(
             numero,
-            '⚠️ El precio mínimo del domicilio es *5.000*. Ingresa un valor igual o mayor. Ejemplos: 5000, 5.000, 12.500'
+            '⚠️ El precio debe ser 0 si fue cancelado o un valor igual o mayor a 5.000. Ejemplos: 0, 5000, 12.500'
           );
           // seguimos en modo captura (no cambiamos flags) para que el usuario reingrese el valor
           return;
@@ -2673,9 +2673,28 @@ export class ChatbotService {
           return;
         }
 
-        const { ok, msg } = await this.finalizarConversacionPorDomi(conversacionId);
-        if (!ok) await this.enviarMensajeTexto(numero, `❌ No fue posible finalizar: ${msg || 'Error desconocido'}`);
+        const resultado = await this.finalizarConversacionPorDomi(conversacionId);
+
+        // Puede venir undefined, lo manejamos aquí
+        if (!resultado) {
+          await this.enviarMensajeTexto(
+            numero,
+            '❌ No fue posible finalizar: Error desconocido'
+          );
+          return;
+        }
+
+        const { ok, msg } = resultado;
+
+        if (!ok) {
+          await this.enviarMensajeTexto(
+            numero,
+            `❌ No fue posible finalizar: ${msg || 'Error desconocido'}`
+          );
+        }
+
         return;
+
       }
 
       if (id === 'confirmar_fin_no') {
@@ -2709,16 +2728,35 @@ export class ChatbotService {
           return;
         }
 
-        // 2) Validar/normalizar precio (2 decimales, > 0 y razonable)
+        // 2) Validar/normalizar precio (2 decimales, permitir 0 o >= 5000)
         const monto = Math.round(s.precioTmp * 100) / 100;
-        if (monto <= 0) {
-          await this.enviarMensajeTexto(numero, '⚠️ El precio debe ser mayor a 0.');
+
+        // No se permiten negativos
+        if (monto < 0) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ El precio debe ser 0 o un valor positivo.'
+          );
           return;
         }
+
+        // Solo se permite 0 o valores >= 5000
+        if (monto !== 0 && monto < 5000) {
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ El precio debe ser 0 o un valor igual o mayor a 5.000.'
+          );
+          return;
+        }
+
         if (monto > 10_000_000) {
-          await this.enviarMensajeTexto(numero, '⚠️ El precio es demasiado alto. Verifica e intenta de nuevo.');
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ El precio es demasiado alto. Verifica e intenta de nuevo.'
+          );
           return;
         }
+
         const costoStr = monto.toFixed(2);
 
         // 3) Validar conversación y que el mismo domiciliario confirme
@@ -2738,14 +2776,15 @@ export class ChatbotService {
         const idemKey = `precio:${conversacionId}:${numeroKey}:${costoStr}`;
         const now = Date.now();
         const last = this.notifsPrecioCache.get(idemKey) || 0;
+        // (si quieres usar last para evitar duplicados, aquí iría la lógica extra)
 
         // NUEVO: resolver DIRECCIÓN DE RECOGIDA (de memoria o BD como fallback)
-        let direccionRecogida = (s?.direccionRecogidaTmp || '').toString().trim(); // NUEVO
-        if (!direccionRecogida) { // NUEVO
-          try { // NUEVO
-            const pid = s?.pedidoId; // si tienes pedido en memoria // NUEVO
-            if (pid) { // NUEVO
-              const p = await this.getPedidoById(pid).catch(() => null); // NUEVO
+        let direccionRecogida = (s?.direccionRecogidaTmp || '').toString().trim();
+        if (!direccionRecogida) {
+          try {
+            const pid = s?.pedidoId;
+            if (pid) {
+              const p = await this.getPedidoById(pid).catch(() => null);
               if (p?.origen_direccion) direccionRecogida = String(p.origen_direccion).trim();
             }
           } catch { /* noop */ }
@@ -2773,7 +2812,6 @@ export class ChatbotService {
           const debeNotificar = Boolean(this.numeroNotificaciones && String(this.numeroNotificaciones).trim());
           if (debeNotificar) {
             try {
-              // timeout corto para que no se quede colgado esperando a WhatsApp
               await axiosWhatsapp.post('/messages', {
                 messaging_product: 'whatsapp',
                 to: this.numeroNotificaciones,
@@ -2788,19 +2826,23 @@ export class ChatbotService {
 💲 Costo: ${costoStr}
 `,
                 },
-              }, { timeout: 7000 }); // 7s de timeout (ajústalo si quieres)
+              }, { timeout: 7000 });
             } catch (notifErr) {
-              // Solo registrar; NO abortar el flujo
-              this.logger.warn(`⚠️ No se pudo enviar notificación a número fijo: ${notifErr instanceof Error ? notifErr.message : notifErr}`);
+              this.logger.warn(
+                `⚠️ No se pudo enviar notificación a número fijo: ${notifErr instanceof Error ? notifErr.message : notifErr
+                }`
+              );
             }
           } else {
             this.logger.warn('ℹ️ No hay numeroNotificaciones configurado. Se omite notificación.');
           }
 
         } catch (e) {
-          // Si falló el guardado, sí detenemos (porque no queremos finalizar sin persistir precio)
           this.logger.error(`❌ Error guardando precio: ${e instanceof Error ? e.message : e}`);
-          await this.enviarMensajeTexto(numero, '⚠️ No pude guardar el precio. Intenta confirmar nuevamente.');
+          await this.enviarMensajeTexto(
+            numero,
+            '⚠️ No pude guardar el precio. Intenta confirmar nuevamente.'
+          );
           return;
         }
 
@@ -2809,17 +2851,31 @@ export class ChatbotService {
         s.capturandoPrecio = false;
         s.conversacionFinalizada = true;
 
-        // NUEVO: limpiar dirección temporal para no arrastrarla a otros cierres
-        try { delete s.direccionRecogidaTmp; } catch { } // NUEVO
+        try { delete s.direccionRecogidaTmp; } catch { }
 
         estadoUsuarios.set(numero, s);
 
-        const { ok, msg } = await this.finalizarConversacionPorDomi(conversacionId, monto);
+        const resultado = await this.finalizarConversacionPorDomi(conversacionId, monto);
+
+        if (!resultado) {
+          await this.enviarMensajeTexto(
+            numero,
+            '❌ No fue posible finalizar: Error desFconocido'
+          );
+          return;
+        }
+
+        const { ok, msg } = resultado;
+
         if (!ok) {
-          await this.enviarMensajeTexto(numero, `❌ No fue posible finalizar: ${msg || 'Error desconocido'}`);
+          await this.enviarMensajeTexto(
+            numero,
+            `❌ No fue posible finalizar: ${msg || 'Error desconocido'}`
+          );
         }
         return;
       }
+
 
 
 
@@ -5010,7 +5066,6 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
   }
 
 
-
   private async finalizarConversacionPorDomi(conversacionId: number, monto?: number) {
     const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
     if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
@@ -5035,7 +5090,6 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
     const clearAllFor = (num?: string) => {
       for (const v of variants(num)) {
-        // estado en memoria
         const st = estadoUsuarios.get(v);
         if (st) {
           delete st.conversacionId;
@@ -5049,7 +5103,6 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
           delete st.pedidoId;
           estadoUsuarios.delete(v);
         }
-        // timers
         if (temporizadoresInactividad.has(v)) {
           clearTimeout(temporizadoresInactividad.get(v)!);
           temporizadoresInactividad.delete(v);
@@ -5093,36 +5146,50 @@ Gracias por tu entrega y compromiso 👏
       this.logger.warn(`⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e}`);
     }
 
-    // try {
-    //   // 👇 línea opcional con el valor si viene definido
-    //   // 👇 Línea dinámica con el valor del domicilio
-    //   const montoLinea =
-    //     (typeof monto === 'number' && Number.isFinite(monto))
-    //       ? `💵 Valor del domicilio: ${Math.round(monto).toLocaleString('es-CO', {
-    //         style: 'currency',
-    //         currency: 'COP',
-    //         minimumFractionDigits: 0
-    //       })}`
-    //       : '💵 Valor del domicilio: $5.000';
-
-    //   const mensajeCliente = [
-    //     '✅ Pedido finalizado con éxito',
-    //     '',
-    //     montoLinea,
-    //     '',
-    //     '💬 Para cualquier duda con el precio, quejas o sugerencias contáctanos al 314 242 3130 📞'
-    //   ].join('\n');
-
-
-
-    //   await this.enviarMensajeTexto(cliente, mensajeCliente);
-    // } catch (e: any) {
-    //   this.logger.warn(`⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e}`);
-    // }
-
-    // ✅ NUEVO: cerrar el pedido como ENTREGADO (7) y dejar al domi disponible manteniendo turno
+    // 👉 BLOQUE DE MENSAJE AL CLIENTE AJUSTADO
     try {
-      // 1) Intentar tomar pedidoId desde estado en memoria
+      if (typeof monto === 'number' && Number.isFinite(monto) && monto === 0) {
+        // Caso especial: pedido cancelado
+        const mensajeCancelacion = [
+          '❌ Tu pedido fue cancelado con éxito.',
+          '',
+          '⚠️ Si esto fue un error, comunícate al 314 242 3130. Es muy importante, gracias. 📞'
+        ].join('\n');
+
+        await this.enviarMensajeTexto(cliente, mensajeCancelacion);
+
+      } else {
+        // Caso normal: domicilio con costo
+        const costoFormateado =
+          (typeof monto === 'number' && Number.isFinite(monto))
+            ? monto.toLocaleString('es-CO', {
+              style: 'currency',
+              currency: 'COP',
+              minimumFractionDigits: 0
+            })
+            : '$5.000';
+
+        const montoLinea = `💵 Tu domicilio está en proceso y tendrá un costo de ${costoFormateado}`;
+
+        const mensajeCliente = [
+          montoLinea,
+          '',
+          '💬 Si tienes algún inconveniente con el precio, queja o sugerencia comunícate al 314 242 3130 📞'
+        ].join('\n');
+
+        await this.enviarMensajeTexto(cliente, mensajeCliente);
+      }
+
+    } catch (e: any) {
+      this.logger.warn(
+        `⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e
+        }`
+      );
+    }
+
+    // ✅ Aquí sigue todo el cierre del pedido / estado 7 / guardar conversación, etc.
+
+    try {
       const pickPedidoId = (num?: string): number | undefined => {
         for (const v of variants(num)) {
           const st = estadoUsuarios.get(v);
@@ -5133,7 +5200,6 @@ Gracias por tu entrega y compromiso 👏
 
       let pedidoId = pickPedidoId(cliente) ?? pickPedidoId(domi);
 
-      // 2) Fallback: buscar el último pedido ASIGNADO (1) del cliente (probando variantes)
       if (!pedidoId) {
         for (const variante of variants(cliente)) {
           const lista = await this.domiciliosService.find({
@@ -5146,20 +5212,13 @@ Gracias por tu entrega y compromiso 👏
       }
 
       if (pedidoId) {
-        // Obtener domiId por teléfono (si existe)
         let domiId: number | undefined = undefined;
         try {
           const domiEntity = await this.domiciliarioService.getByTelefono(domi);
           domiId = domiEntity?.id;
         } catch { }
 
-        // 3) Marcar ENTREGADO (7) de forma atómica (requiere método en DomiciliosService)
-        const okEntregado = await this.domiciliosService.marcarEntregadoSiAsignado(pedidoId, domiId);
-
-        // // 4) Dejar al domiciliario disponible sin mover su turno
-        // if (okEntregado && domiId) {
-        //   await this.domiciliarioService.setDisponibleManteniendoTurnoById(domiId, true).catch(() => { });
-        // }
+        await this.domiciliosService.marcarEntregadoSiAsignado(pedidoId, domiId);
       } else {
         this.logger.warn(`⚠️ No pude inferir pedidoId a cerrar para conv=${conversacionId} (cliente=${cliente}).`);
       }
@@ -5167,20 +5226,18 @@ Gracias por tu entrega y compromiso 👏
       this.logger.error(`❌ Falló el cierre (estado=7) para conv=${conversacionId}: ${e?.message || e}`);
     }
 
-    // Persistencia: cerrar conversación SIEMPRE
     conv.estado = 'finalizada';
     conv.fecha_fin = new Date();
     try {
       await this.conversacionRepo.save(conv);
     } catch (e: any) {
       this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
-      // seguimos con limpieza en memoria igualmente
     }
 
-    // Limpieza en memoria/timers (todas las variantes de número)
     clearAllFor(cliente);
     clearAllFor(domi);
 
+    // 🔚 Siempre devolvemos un objeto, nunca undefined
     return { ok: true };
   }
 
@@ -5400,10 +5457,13 @@ Gracias por tu entrega y compromiso 👏
     // Debe quedar solo dígitos
     if (!/^\d+$/.test(limpio)) return null;
 
-    // Convierte a número
+    // Convertir a número
     const n = Number(limpio);
 
-    // Debe ser al menos 1000 (4 cifras)
+    // ⬅️ NUEVO: permitir explícitamente el 0
+    if (n === 0) return 0;
+
+    // Para todo lo demás, exigir al menos 1000
     if (!Number.isFinite(n) || n < 1000) return null;
 
     return n;
