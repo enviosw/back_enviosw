@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity('conversaciones')
 export class Conversacion {
@@ -19,4 +25,14 @@ export class Conversacion {
 
   @Column({ default: 'activa' }) // 'activa' | 'finalizada'
   estado: string;
+
+  // ⭐️ Campos que te faltaban
+  @Column({ default: false })
+  esta_finalizada: boolean;
+
+  @Column({ nullable: true })
+  finalizada_por: string; // 'cliente' | 'domiciliario'
+
+  @Column({ type: 'timestamp', nullable: true })
+  fecha_finalizacion: Date;
 }
