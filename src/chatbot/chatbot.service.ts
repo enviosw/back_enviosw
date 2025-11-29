@@ -925,12 +925,12 @@ export class ChatbotService {
       // const esDomi = await this.domiciliarioService.esDomiciliario(numero).catch(() => false);
       // if (!esDomi && horaBOG >= 1 && horaBOG < 5) { ... }
 
-      if (horaBOG >= 1 && horaBOG < 5) {
+      if (horaBOG >= 4 && horaBOG < 5) {
         await this.enviarMensajeTexto(
           numero,
           [
             '🕐 *Fuera de horario de servicio*',
-            'Por el momento no tenemos servicio disponible entre *1:00 a. m.* y *5:00 a. m.* (hora 🇨🇴).',
+            'Por el momento no tenemos servicio disponible entre *4:00 a. m.* y *5:00 a. m.* (hora 🇨🇴).',
             'Por favor escríbenos a partir de las *5:00 a. m.*. ¡Gracias por tu comprensión! 🙏'
           ].join('\n')
         );

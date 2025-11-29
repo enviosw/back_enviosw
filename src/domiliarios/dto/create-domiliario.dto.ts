@@ -12,8 +12,7 @@ export class CreateDomiliarioDto {
   apellido: string;
 
   @IsString()
-  @IsNotEmpty()
-  @Length(1, 50)
+  @IsOptional()
   alias: string;
 
   @IsString()
@@ -46,4 +45,17 @@ export class CreateDomiliarioDto {
   @IsInt()
   @IsOptional()
   turno_orden?: number;
+
+
+    // 👇 NUEVO: horario opcional (string o null)
+  @IsString()
+  @IsOptional()
+  @Length(1, 50)
+  horario?: string | null;
+
+  // 👇 NUEVO: descanso opcional (string o null)
+  @IsString()
+  @IsOptional()
+  @Length(1, 50)
+  descanso?: string | null;
 }

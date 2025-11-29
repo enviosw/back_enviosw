@@ -18,7 +18,7 @@ export class Domiciliario {
   @Column({ length: 100 })
   apellido: string;
 
-  @Column({ length: 50 })
+  @Column({ length: 50, nullable: true })
   alias: string;
 
   @Index('IDX_TELEFONO_WHATSAPP', ['telefono_whatsapp'], { unique: true })
@@ -54,4 +54,10 @@ export class Domiciliario {
   @Column({ name: 'zona_id', type: 'int', nullable: true })
   zona_id: number | null;
 
+    // 👉 NUEVOS CAMPOS SOLICITADOS
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  horario: string | null;
+
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  descanso: string | null;
 }
