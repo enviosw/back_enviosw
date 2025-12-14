@@ -5285,10 +5285,10 @@ Gracias por tu entrega y compromiso 👏
                 minimumFractionDigits: 0
               })
               : '$5.000';
-
+              
+          // `💵 *TU DOMICILIO ESTÁ EN PROCESO Y TENDRÁ UN COSTO DE ${costoFormateado}*`,
+            // '',
           const mensajeCliente = [
-            `💵 *TU DOMICILIO ESTÁ EN PROCESO Y TENDRÁ UN COSTO DE ${costoFormateado}*`,
-            '',
             '🤖 *GRACIAS POR PREFERIRNOS* 🛵',
             '*¿TIENES UN RECLAMO, SUGERENCIA, AFILIACIÓN O ALGÚN COBRO EXCESIVO?*',
             '📲 *ESCRÍBENOS AL 314 242 3130 Y CON GUSTO TE ATENDEMOS.*'
