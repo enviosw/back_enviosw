@@ -3655,7 +3655,7 @@ if (estado?.conversacionId) {
 
 
   // ID de la imagen que subiste con /media
-  private readonly ID_IMAGEN_SALUDO = '880200348007063';  //ejemplo 686382684258783  Reak: 880200348007063
+  private readonly ID_IMAGEN_SALUDO = '1302172821671221';  //ejemplo 686382684258783  Reak: 880200348007063
 
   // Envía saludo con IMAGEN + TEXTO CORTO + 3 BOTONES
   private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
