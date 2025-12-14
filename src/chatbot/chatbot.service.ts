@@ -739,9 +739,10 @@ export class ChatbotService {
               await this.mostrarMenuPostConfirmacion(
                 pedido.numero_cliente,
                 pedido.id,
-                '⏳Estamos buscando un domiciliario disponible, Si ya no lo necesitas, puedes cancelar:',
+                '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO DISPONIBLE.*\n\n*SI YA NO LO NECESITAS, PUEDES CANCELAR:*',
                 60 * 1000
               );
+
             } catch (e) {
               this.logger.warn(`⚠️ No se pudo mostrar botón cancelar tras race: ${e?.message || e}`);
             }
@@ -1262,8 +1263,9 @@ export class ChatbotService {
       // 1) Mensaje de "buscando domiciliario..."
       await this.enviarMensajeTexto(
         numero,
-        '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
+        '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
       );
+
       // 3) Botón CANCELAR con helper (incluye Ref:#, valida cancelable y respeta bloqueoMenu/TTL)
       if (pid) {
         await this.mostrarMenuPostConfirmacion(
@@ -1314,12 +1316,12 @@ export class ChatbotService {
 
           estadoUsuarios.set(key, stLocal);
 
-       await this.enviarMensajeTexto(
-  numero,
-  '💰 *Escribe el valor total cobrado al cliente* (ej: 15000, $15.000 o 12.500).\n\n' +
-  'Si el domicilio fue *cancelado por el cliente*, escribe **0** como valor.\n' +
-  'Recuerda conservar la evidencia de la cancelación (mensaje o soporte del cliente).'
-);
+          await this.enviarMensajeTexto(
+            numero,
+            '💰 *Escribe el valor total cobrado al cliente* (ej: 15000, $15.000 o 12.500).\n\n' +
+            'Si el domicilio fue *cancelado por el cliente*, escribe **0** como valor.\n' +
+            'Recuerda conservar la evidencia de la cancelación (mensaje o soporte del cliente).'
+          );
 
           return; // detenemos para no caer en otros handlers
         }
@@ -1583,9 +1585,10 @@ export class ChatbotService {
           }
 
           if (st.esperandoAsignacion && st.pedidoId && !st.conversacionId) {
+
             await this.enviarMensajeTexto(
               numero,
-              '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
+              '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
             );
 
 
@@ -1705,10 +1708,12 @@ export class ChatbotService {
         }
 
         // Mensaje de “procesando”
+        // Mensaje de “procesando”
         await this.enviarMensajeTexto(
           numero,
-          '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
+          '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
         );
+
 
 
         // Muestra botón de cancelar si tenemos pedidoId y no hay conversación activa
@@ -1729,191 +1734,191 @@ export class ChatbotService {
     }
 
 
-if (estado?.conversacionId) {
-  const conversacion = await this.conversacionRepo.findOne({
-    where: { id: estado.conversacionId },
-  });
-
-  if (!conversacion) {
-    return;
-  }
-
-  const esCliente = numero === conversacion.numero_cliente;
-  const esDomiciliario = numero === conversacion.numero_domiciliario;
-  const receptor = esCliente ? conversacion.numero_domiciliario : conversacion.numero_cliente;
-
-  const conversacionCerrada = !!conversacion.esta_finalizada;
-
-  // ⛔ Si la conversación está cerrada, SOLO bloquea al CLIENTE
-  if (conversacionCerrada && esCliente) {
-    await this.enviarMensajeTexto(
-      numero,
-      '⚠️ Este pedido ya fue finalizado. No es posible enviar más mensajes en esta conversación.'
-    );
-    return;
-  }
-
-  // -----------------------
-  // Normalizar entrada
-  // -----------------------
-  const entrada = texto
-    ?.trim()
-    .toLowerCase()
-    .normalize('NFD') // separa acentos
-    .replace(/[\u0300-\u036f]/g, ''); // elimina acentos
-
-
-  // =====================================================
-  // 1) CLIENTE escribe "finalizar" → cierra pedido SOLO para él
-  // =====================================================
-  const finalesCliente = ['finalizar', 'pedido finalizado', 'finalizado'];
-  if (entrada && finalesCliente.some(p => entrada.startsWith(p))) {
-
-    // Marcar conversación como finalizada (si no lo estaba)
-    conversacion.esta_finalizada = true;
-    conversacion.finalizada_por = esCliente ? 'cliente' : (esDomiciliario ? 'domiciliario' : 'desconocido');
-    conversacion.fecha_finalizacion = new Date();
-    await this.conversacionRepo.save(conversacion);
-
-    // 🔓 LIBERAR AL CLIENTE: quitarle conversacionId para que pueda hacer nuevos pedidos
-    const stCliente = estadoUsuarios.get(conversacion.numero_cliente) || {};
-    delete stCliente.conversacionId;
-    delete stCliente.capturandoPrecio;
-    delete stCliente.capturandoDireccionRecogida;
-    delete stCliente.conversacionFinalizada;
-    estadoUsuarios.set(conversacion.numero_cliente, stCliente);
-
-    // Mantener al DOMI con la conversación para que pueda seguir el flujo (precio, etc.)
-    const stDomi = estadoUsuarios.get(conversacion.numero_domiciliario) || {};
-    stDomi.clienteFinalizo = true; // bandera informativa por si la quieres usar
-    estadoUsuarios.set(conversacion.numero_domiciliario, stDomi);
-
-    if (esCliente) {
-      // Mensaje al cliente
-  await this.enviarMensajeTexto(
-  conversacion.numero_cliente,
-  '✅ ¡Tu pedido ha sido finalizado con éxito! Gracias por elegirnos. En Domicilios W siempre es un gusto atenderte.'
-);
-
-
-      // Aviso al domi (sin bloquearle nada)
-      await this.enviarMensajeTexto(
-        conversacion.numero_domiciliario,
-        'ℹ️ El cliente marcó el pedido como finalizado. Aún puedes cerrar tu flujo y reportar el precio.'
-      );
-    } else if (esDomiciliario) {
-      // Caso raro: si el domi manda "finalizar" como texto
-      await this.enviarMensajeTexto(
-        conversacion.numero_domiciliario,
-        '✅ Has finalizado este pedido y la conversación ha sido cerrada.'
-      );
-    }
-
-    return; // ⛔ importante: no reenviar más mensajes
-  }
-
-  // =====================================================
-  // 2) Lógica "fin_domi" / botón del domiciliario
-  // =====================================================
-  const finales = ['fin_domi', 'fin-domi', 'fin domi'];
-  if (entrada && finales.some(p => entrada.startsWith(p))) {
-    // Solo permitir que el domiciliario dispare esto
-    const conversacionConfirm = await this.conversacionRepo.findOne({ where: { id: estado.conversacionId } });
-    if (!conversacionConfirm) return;
-
-    const esDomi = numero === conversacionConfirm.numero_domiciliario;
-    if (!esDomi) {
-      await this.enviarMensajeTexto(numero, '⛔ Solo el domiciliario puede finalizar este pedido.');
-      return;
-    }
-
-    // Mostrar confirmación SÍ/NO
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Seguro que deseas finalizar el pedido?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'fin_domi', title: '✅ Sí, finalizar' } }
-            ],
-          },
-        },
+    if (estado?.conversacionId) {
+      const conversacion = await this.conversacionRepo.findOne({
+        where: { id: estado.conversacionId },
       });
-    } catch (e) {
-      this.logger.warn(
-        `⚠️ Falló envío de confirmación de fin: ` +
-        (e?.response?.data?.error?.message || e?.message || e)
-      );
-    }
-    return;
-  }
 
-  // =====================================================
-  // 3) Guardar mensaje SIEMPRE (aunque esté cerrada)
-  // =====================================================
-  await this.mensajeRepo.save({
-    conversacion_id: String(conversacion.id),
-    emisor: numero,
-    receptor,
-    contenido: texto,
-    tipo,
-  });
+      if (!conversacion) {
+        return;
+      }
 
-  // =====================================================
-  // 4) Reenviar el mensaje al otro participante
-  // =====================================================
-  if (tipo === 'text' && texto) {
+      const esCliente = numero === conversacion.numero_cliente;
+      const esDomiciliario = numero === conversacion.numero_domiciliario;
+      const receptor = esCliente ? conversacion.numero_domiciliario : conversacion.numero_cliente;
 
-    // Solo reenviamos si NO está cerrada
-    if (!conversacionCerrada) {
-      await this.enviarMensajeTexto(receptor, `💬 ${texto}`);
+      const conversacionCerrada = !!conversacion.esta_finalizada;
 
-      // Si el mensaje lo envía el CLIENTE, mandamos el botón de finalizar al DOMI
-      if (esCliente) {
+      // ⛔ Si la conversación está cerrada, SOLO bloquea al CLIENTE
+      if (conversacionCerrada && esCliente) {
+        await this.enviarMensajeTexto(
+          numero,
+          '⚠️ Este pedido ya fue finalizado. No es posible enviar más mensajes en esta conversación.'
+        );
+        return;
+      }
+
+      // -----------------------
+      // Normalizar entrada
+      // -----------------------
+      const entrada = texto
+        ?.trim()
+        .toLowerCase()
+        .normalize('NFD') // separa acentos
+        .replace(/[\u0300-\u036f]/g, ''); // elimina acentos
+
+
+      // =====================================================
+      // 1) CLIENTE escribe "finalizar" → cierra pedido SOLO para él
+      // =====================================================
+      const finalesCliente = ['finalizar', 'pedido finalizado', 'finalizado'];
+      if (entrada && finalesCliente.some(p => entrada.startsWith(p))) {
+
+        // Marcar conversación como finalizada (si no lo estaba)
+        conversacion.esta_finalizada = true;
+        conversacion.finalizada_por = esCliente ? 'cliente' : (esDomiciliario ? 'domiciliario' : 'desconocido');
+        conversacion.fecha_finalizacion = new Date();
+        await this.conversacionRepo.save(conversacion);
+
+        // 🔓 LIBERAR AL CLIENTE: quitarle conversacionId para que pueda hacer nuevos pedidos
+        const stCliente = estadoUsuarios.get(conversacion.numero_cliente) || {};
+        delete stCliente.conversacionId;
+        delete stCliente.capturandoPrecio;
+        delete stCliente.capturandoDireccionRecogida;
+        delete stCliente.conversacionFinalizada;
+        estadoUsuarios.set(conversacion.numero_cliente, stCliente);
+
+        // Mantener al DOMI con la conversación para que pueda seguir el flujo (precio, etc.)
+        const stDomi = estadoUsuarios.get(conversacion.numero_domiciliario) || {};
+        stDomi.clienteFinalizo = true; // bandera informativa por si la quieres usar
+        estadoUsuarios.set(conversacion.numero_domiciliario, stDomi);
+
+        if (esCliente) {
+          // Mensaje al cliente
+          await this.enviarMensajeTexto(
+            conversacion.numero_cliente,
+            '✅ ¡Tu pedido ha sido finalizado con éxito! Gracias por elegirnos. En Domicilios W siempre es un gusto atenderte.'
+          );
+
+
+          // Aviso al domi (sin bloquearle nada)
+          await this.enviarMensajeTexto(
+            conversacion.numero_domiciliario,
+            'ℹ️ El cliente marcó el pedido como finalizado. Aún puedes cerrar tu flujo y reportar el precio.'
+          );
+        } else if (esDomiciliario) {
+          // Caso raro: si el domi manda "finalizar" como texto
+          await this.enviarMensajeTexto(
+            conversacion.numero_domiciliario,
+            '✅ Has finalizado este pedido y la conversación ha sido cerrada.'
+          );
+        }
+
+        return; // ⛔ importante: no reenviar más mensajes
+      }
+
+      // =====================================================
+      // 2) Lógica "fin_domi" / botón del domiciliario
+      // =====================================================
+      const finales = ['fin_domi', 'fin-domi', 'fin domi'];
+      if (entrada && finales.some(p => entrada.startsWith(p))) {
+        // Solo permitir que el domiciliario dispare esto
+        const conversacionConfirm = await this.conversacionRepo.findOne({ where: { id: estado.conversacionId } });
+        if (!conversacionConfirm) return;
+
+        const esDomi = numero === conversacionConfirm.numero_domiciliario;
+        if (!esDomi) {
+          await this.enviarMensajeTexto(numero, '⛔ Solo el domiciliario puede finalizar este pedido.');
+          return;
+        }
+
+        // Mostrar confirmación SÍ/NO
         try {
           await axiosWhatsapp.post('/messages', {
             messaging_product: 'whatsapp',
-            to: receptor, // DOMICILIARIO
+            to: numero,
             type: 'interactive',
             interactive: {
               type: 'button',
-              body: { text: '¿Deseas finalizar el pedido?' },
+              body: { text: '¿Seguro que deseas finalizar el pedido?' },
               action: {
                 buttons: [
-                  {
-                    type: 'reply',
-                    reply: { id: 'fin_domi', title: '✅ Finalizar' }
-                  }
-                ]
+                  { type: 'reply', reply: { id: 'fin_domi', title: '✅ Sí, finalizar' } }
+                ],
               },
             },
           });
         } catch (e) {
           this.logger.warn(
-            `⚠️ Falló botón fin_domi a ${receptor}: ` +
+            `⚠️ Falló envío de confirmación de fin: ` +
             (e?.response?.data?.error?.message || e?.message || e)
           );
         }
+        return;
       }
-    } else {
-      // Conversación cerrada:
-      //  - Si escribe el domi: avisamos que el cliente ya finalizó, pero no reenviamos nada.
-      if (esDomiciliario) {
-        await this.enviarMensajeTexto(
-          numero,
-          'ℹ️ El cliente ya finalizó el pedido. Tus mensajes no se reenviarán, pero aún puedes finalizar el servicio con el botón o confirmando el precio.'
-        );
+
+      // =====================================================
+      // 3) Guardar mensaje SIEMPRE (aunque esté cerrada)
+      // =====================================================
+      await this.mensajeRepo.save({
+        conversacion_id: String(conversacion.id),
+        emisor: numero,
+        receptor,
+        contenido: texto,
+        tipo,
+      });
+
+      // =====================================================
+      // 4) Reenviar el mensaje al otro participante
+      // =====================================================
+      if (tipo === 'text' && texto) {
+
+        // Solo reenviamos si NO está cerrada
+        if (!conversacionCerrada) {
+          await this.enviarMensajeTexto(receptor, `💬 ${texto}`);
+
+          // Si el mensaje lo envía el CLIENTE, mandamos el botón de finalizar al DOMI
+          if (esCliente) {
+            try {
+              await axiosWhatsapp.post('/messages', {
+                messaging_product: 'whatsapp',
+                to: receptor, // DOMICILIARIO
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '¿Deseas finalizar el pedido?' },
+                  action: {
+                    buttons: [
+                      {
+                        type: 'reply',
+                        reply: { id: 'fin_domi', title: '✅ Finalizar' }
+                      }
+                    ]
+                  },
+                },
+              });
+            } catch (e) {
+              this.logger.warn(
+                `⚠️ Falló botón fin_domi a ${receptor}: ` +
+                (e?.response?.data?.error?.message || e?.message || e)
+              );
+            }
+          }
+        } else {
+          // Conversación cerrada:
+          //  - Si escribe el domi: avisamos que el cliente ya finalizó, pero no reenviamos nada.
+          if (esDomiciliario) {
+            await this.enviarMensajeTexto(
+              numero,
+              'ℹ️ El cliente ya finalizó el pedido. Tus mensajes no se reenviarán, pero aún puedes finalizar el servicio con el botón o confirmando el precio.'
+            );
+          }
+        }
+
+        return;
       }
+
     }
-
-    return;
-  }
-
-}
 
 
 
@@ -2723,12 +2728,12 @@ if (estado?.conversacionId) {
         st.conversacionId = conversacionId;
         estadoUsuarios.set(numero, st);
 
-      await this.enviarMensajeTexto(
-  numero,
-  '📍 Indica el restaurante, local o barrio de *Recogida*.\n\n' +
-  'Si el domicilio fue *cancelado*, escribe un mensaje explicando el motivo y coloca **0** en el precio.\n' +
-  'Debes contar con un soporte que confirme la cancelación (por ejemplo, un mensaje del cliente).'
-);
+        await this.enviarMensajeTexto(
+          numero,
+          '📍 Indica el restaurante, local o barrio de *Recogida*.\n\n' +
+          'Si el domicilio fue *cancelado*, escribe un mensaje explicando el motivo y coloca **0** en el precio.\n' +
+          'Debes contar con un soporte que confirme la cancelación (por ejemplo, un mensaje del cliente).'
+        );
 
         return;
       }
@@ -3075,8 +3080,8 @@ if (estado?.conversacionId) {
           await showCancelar(
             st.pedidoId,
             st.esperandoAsignacion
-              ? '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
-              : '⏳ Si ya no lo necesitas, puedes cancelar:'
+              ? '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
+              : '⏳ *SI YA NO LO NECESITAS, PUEDES CANCELAR:*'
           );
 
           return;
@@ -3089,8 +3094,8 @@ if (estado?.conversacionId) {
             await showCancelar(
               st.pedidoId,
               st.esperandoAsignacion
-                ? '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
-                : '⏳ Si ya no lo necesitas, puedes cancelar:'
+                ? '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
+                : '⏳ *SI YA NO LO NECESITAS, PUEDES CANCELAR:*'
             );
 
           }
@@ -3134,7 +3139,7 @@ if (estado?.conversacionId) {
           // ⛳️ Mostrar botón de cancelar INMEDIATO (apenas confirmó)
           await showCancelar(
             pedidoBase.id,
-            '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
+            '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
           );
 
 
@@ -3333,14 +3338,14 @@ if (estado?.conversacionId) {
                 estadoUsuarios.set(numero, st);
                 await showCancelar(
                   pedidoPendiente.id,
-                  '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
+                  '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
                 );
 
               }
             } else {
               await showCancelar(
                 st.pedidoId,
-                '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌'
+                '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
               );
 
             }
@@ -4603,7 +4608,7 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       await this.mostrarMenuPostConfirmacion(
         telClienteNorm,
         pedidoId,
-        '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 *DomiciliosW*, tu mejor opción 🙌',
+        '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌',
         60 * 1000
       );
 
@@ -4662,7 +4667,7 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
     // 6) Avisar al cliente (todavía NO hay conversación)
     await this.enviarMensajeTexto(
       telClienteNorm,
-      '⏳ Estamos buscando un domiciliario cercano a tu dirección para asignar tu pedido lo antes posible.\n\n🛵 DomiciliosW, tu mejor opción 🙌'
+      '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
     );
 
 
@@ -5167,202 +5172,202 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
   }
 
 
-private async finalizarConversacionPorDomi(conversacionId: number, monto?: number) {
-  const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
-  if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
+  private async finalizarConversacionPorDomi(conversacionId: number, monto?: number) {
+    const conv = await this.conversacionRepo.findOne({ where: { id: String(conversacionId) } });
+    if (!conv) return { ok: false, msg: 'No se encontró la conversación' };
 
-  const cliente = conv.numero_cliente;
-  const domi = conv.numero_domiciliario;
+    const cliente = conv.numero_cliente;
+    const domi = conv.numero_domiciliario;
 
-  // 👉 Saber si YA estaba finalizada (por el cliente, por ejemplo)
-  const yaFinalizadaAntes = conv.estado === 'finalizada';
+    // 👉 Saber si YA estaba finalizada (por el cliente, por ejemplo)
+    const yaFinalizadaAntes = conv.estado === 'finalizada';
 
-  // Helpers locales
-  const norm = (n?: string) => (String(n || '').replace(/\D/g, ''));
-  const variants = (n?: string) => {
-    const d = norm(n);
-    const ten = d.slice(-10);
-    const v = new Set<string>();
-    if (!ten) return v;
-    v.add(ten);         // 10 dígitos
-    v.add(`57${ten}`);  // 57 + 10
-    v.add(`+57${ten}`); // +57 + 10
-    v.add(d);           // tal cual llegó
-    return v;
-  };
+    // Helpers locales
+    const norm = (n?: string) => (String(n || '').replace(/\D/g, ''));
+    const variants = (n?: string) => {
+      const d = norm(n);
+      const ten = d.slice(-10);
+      const v = new Set<string>();
+      if (!ten) return v;
+      v.add(ten);         // 10 dígitos
+      v.add(`57${ten}`);  // 57 + 10
+      v.add(`+57${ten}`); // +57 + 10
+      v.add(d);           // tal cual llegó
+      return v;
+    };
 
-  const clearAllFor = (num?: string) => {
-    for (const v of variants(num)) {
-      const st = estadoUsuarios.get(v);
-      if (st) {
-        delete st.conversacionId;
-        delete st.flujoActivo;
-        delete st.awaitingEstado;
-        delete st.awaitingEstadoExpiresAt;
-        delete st.soporteActivo;
-        delete st.soporteConversacionId;
-        delete st.soporteAsesor;
-        delete st.soporteCliente;
-        delete st.pedidoId;
-        estadoUsuarios.delete(v);
+    const clearAllFor = (num?: string) => {
+      for (const v of variants(num)) {
+        const st = estadoUsuarios.get(v);
+        if (st) {
+          delete st.conversacionId;
+          delete st.flujoActivo;
+          delete st.awaitingEstado;
+          delete st.awaitingEstadoExpiresAt;
+          delete st.soporteActivo;
+          delete st.soporteConversacionId;
+          delete st.soporteAsesor;
+          delete st.soporteCliente;
+          delete st.pedidoId;
+          estadoUsuarios.delete(v);
+        }
+        if (temporizadoresInactividad.has(v)) {
+          clearTimeout(temporizadoresInactividad.get(v)!);
+          temporizadoresInactividad.delete(v);
+        }
+        if (temporizadoresEstado.has(v)) {
+          clearTimeout(temporizadoresEstado.get(v)!);
+          temporizadoresEstado.delete(v);
+        }
+        if (bloqueoMenu.has(v)) {
+          clearTimeout(bloqueoMenu.get(v)!);
+          bloqueoMenu.delete(v);
+        }
       }
-      if (temporizadoresInactividad.has(v)) {
-        clearTimeout(temporizadoresInactividad.get(v)!);
-        temporizadoresInactividad.delete(v);
-      }
-      if (temporizadoresEstado.has(v)) {
-        clearTimeout(temporizadoresEstado.get(v)!);
-        temporizadoresEstado.delete(v);
-      }
-      if (bloqueoMenu.has(v)) {
-        clearTimeout(bloqueoMenu.get(v)!);
-        bloqueoMenu.delete(v);
-      }
-    }
-  };
+    };
 
-  // ================================
-  // 1) Mensajes al DOMI (siempre)
-  // ================================
-  try {
-    await this.enviarMensajeTexto(
-      domi,
-      `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
+    // ================================
+    // 1) Mensajes al DOMI (siempre)
+    // ================================
+    try {
+      await this.enviarMensajeTexto(
+        domi,
+        `✅ *¡SERVICIO FINALIZADO CON ÉXITO!* 🚀
 Gracias por tu entrega y compromiso 👏
 
 👉 *Ahora elige tu estado:*`
-    );
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: domi,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: 'Cambia tu disponibilidad: ES OBLIGATORIO!!' },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-            { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-          ],
+      );
+      await axiosWhatsapp.post('/messages', {
+        messaging_product: 'whatsapp',
+        to: domi,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: 'Cambia tu disponibilidad: ES OBLIGATORIO!!' },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
+              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
+            ],
+          },
         },
-      },
-    });
-  } catch (e: any) {
-    this.logger.warn(
-      `⚠️ Botones de estado al domi fallaron: ${
-        e?.response?.data?.error?.message || e?.message || e
-      }`
-    );
-  }
+      });
+    } catch (e: any) {
+      this.logger.warn(
+        `⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e
+        }`
+      );
+    }
 
-  // ================================
-  // 2) Mensajes al CLIENTE
-  //    SOLO si NO había finalizado antes
-  // ================================
-  if (!yaFinalizadaAntes) {
-    try {
-      if (typeof monto === 'number' && Number.isFinite(monto) && monto === 0) {
-        // Caso especial: pedido cancelado
-        const mensajeCancelacion = [
-          '❌ Tu pedido fue cancelado con éxito.',
-          '',
-          '⚠️ Si esto fue un error, comunícate al 314 242 3130. Es muy importante, gracias. 📞'
-        ].join('\n');
+    // ================================
+    // 2) Mensajes al CLIENTE
+    //    SOLO si NO había finalizado antes
+    // ================================
+    if (!yaFinalizadaAntes) {
+      try {
+        if (typeof monto === 'number' && Number.isFinite(monto) && monto === 0) {
+          // Caso especial: pedido cancelado
+          const mensajeCancelacion = [
+            '❌ *TU PEDIDO FUE CANCELADO CON ÉXITO.*',
+            '',
+            '🤖 *GRACIAS POR PREFERIRNOS* 🛵',
+            '*¿TIENES UN RECLAMO, SUGERENCIA, AFILIACIÓN O ALGÚN COBRO EXCESIVO?*',
+            '📲 *ESCRÍBENOS AL 314 242 3130 Y CON GUSTO TE ATENDEMOS.*'
+          ].join('\n');
 
-        await this.enviarMensajeTexto(cliente, mensajeCancelacion);
+          await this.enviarMensajeTexto(cliente, mensajeCancelacion);
 
-      } else {
-        // Caso normal: domicilio con costo
-        const costoFormateado =
-          (typeof monto === 'number' && Number.isFinite(monto))
-            ? monto.toLocaleString('es-CO', {
+        } else {
+          // Caso normal: domicilio con costo
+          const costoFormateado =
+            (typeof monto === 'number' && Number.isFinite(monto))
+              ? monto.toLocaleString('es-CO', {
                 style: 'currency',
                 currency: 'COP',
                 minimumFractionDigits: 0
               })
-            : '$5.000';
+              : '$5.000';
 
-        const montoLinea = `💵 Tu domicilio está en proceso y tendrá un costo de ${costoFormateado}`;
+          const mensajeCliente = [
+            `💵 *TU DOMICILIO ESTÁ EN PROCESO Y TENDRÁ UN COSTO DE ${costoFormateado}*`,
+            '',
+            '🤖 *GRACIAS POR PREFERIRNOS* 🛵',
+            '*¿TIENES UN RECLAMO, SUGERENCIA, AFILIACIÓN O ALGÚN COBRO EXCESIVO?*',
+            '📲 *ESCRÍBENOS AL 314 242 3130 Y CON GUSTO TE ATENDEMOS.*'
+          ].join('\n');
 
-        const mensajeCliente = [
-          montoLinea,
-          '',
-          '💬 Si tienes algún inconveniente con el precio, queja o sugerencia comunícate al 314 242 3130 📞'
-        ].join('\n');
+          await this.enviarMensajeTexto(cliente, mensajeCliente);
+        }
 
-        await this.enviarMensajeTexto(cliente, mensajeCliente);
+      } catch (e: any) {
+        this.logger.warn(
+          `⚠️ Mensaje de cierre a cliente falló: ${e?.response?.data?.error?.message || e?.message || e
+          }`
+        );
+      }
+    }
+
+    // ================================
+    // 3) Cierre del pedido / estado 7
+    // ================================
+    try {
+      const pickPedidoId = (num?: string): number | undefined => {
+        for (const v of variants(num)) {
+          const st = estadoUsuarios.get(v);
+          if (st?.pedidoId) return Number(st.pedidoId);
+        }
+        return undefined;
+      };
+
+      let pedidoId = pickPedidoId(cliente) ?? pickPedidoId(domi);
+
+      if (!pedidoId) {
+        for (const variante of variants(cliente)) {
+          const lista = await this.domiciliosService.find({
+            where: { numero_cliente: variante, estado: 1 }, // 1 = ASIGNADO
+            order: { fecha_creacion: 'DESC' },
+            take: 1,
+          });
+          if (lista?.length) { pedidoId = lista[0].id; break; }
+        }
       }
 
+      if (pedidoId) {
+        let domiId: number | undefined = undefined;
+        try {
+          const domiEntity = await this.domiciliarioService.getByTelefono(domi);
+          domiId = domiEntity?.id;
+        } catch { }
+
+        await this.domiciliosService.marcarEntregadoSiAsignado(pedidoId, domiId);
+      } else {
+        this.logger.warn(`⚠️ No pude inferir pedidoId a cerrar para conv=${conversacionId} (cliente=${cliente}).`);
+      }
     } catch (e: any) {
-      this.logger.warn(
-        `⚠️ Mensaje de cierre a cliente falló: ${
-          e?.response?.data?.error?.message || e?.message || e
-        }`
-      );
-    }
-  }
-
-  // ================================
-  // 3) Cierre del pedido / estado 7
-  // ================================
-  try {
-    const pickPedidoId = (num?: string): number | undefined => {
-      for (const v of variants(num)) {
-        const st = estadoUsuarios.get(v);
-        if (st?.pedidoId) return Number(st.pedidoId);
-      }
-      return undefined;
-    };
-
-    let pedidoId = pickPedidoId(cliente) ?? pickPedidoId(domi);
-
-    if (!pedidoId) {
-      for (const variante of variants(cliente)) {
-        const lista = await this.domiciliosService.find({
-          where: { numero_cliente: variante, estado: 1 }, // 1 = ASIGNADO
-          order: { fecha_creacion: 'DESC' },
-          take: 1,
-        });
-        if (lista?.length) { pedidoId = lista[0].id; break; }
-      }
+      this.logger.error(`❌ Falló el cierre (estado=7) para conv=${conversacionId}: ${e?.message || e}`);
     }
 
-    if (pedidoId) {
-      let domiId: number | undefined = undefined;
-      try {
-        const domiEntity = await this.domiciliarioService.getByTelefono(domi);
-        domiId = domiEntity?.id;
-      } catch { }
-
-      await this.domiciliosService.marcarEntregadoSiAsignado(pedidoId, domiId);
-    } else {
-      this.logger.warn(`⚠️ No pude inferir pedidoId a cerrar para conv=${conversacionId} (cliente=${cliente}).`);
+    // ================================
+    // 4) Marcar conversación como finalizada
+    //    (aunque el cliente ya lo hubiera hecho, esto la deja coherente)
+    // ================================
+    conv.estado = 'finalizada';
+    conv.fecha_fin = new Date();
+    try {
+      await this.conversacionRepo.save(conv);
+    } catch (e: any) {
+      this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
     }
-  } catch (e: any) {
-    this.logger.error(`❌ Falló el cierre (estado=7) para conv=${conversacionId}: ${e?.message || e}`);
+
+    // ================================
+    // 5) Limpiar estados de cliente y domi
+    // ================================
+    clearAllFor(cliente);
+    clearAllFor(domi);
+
+    // 🔚 Siempre devolvemos un objeto, nunca undefined
+    return { ok: true };
   }
-
-  // ================================
-  // 4) Marcar conversación como finalizada
-  //    (aunque el cliente ya lo hubiera hecho, esto la deja coherente)
-  // ================================
-  conv.estado = 'finalizada';
-  conv.fecha_fin = new Date();
-  try {
-    await this.conversacionRepo.save(conv);
-  } catch (e: any) {
-    this.logger.error(`❌ No se pudo guardar el cierre de la conversación ${conversacionId}: ${e?.message || e}`);
-  }
-
-  // ================================
-  // 5) Limpiar estados de cliente y domi
-  // ================================
-  clearAllFor(cliente);
-  clearAllFor(domi);
-
-  // 🔚 Siempre devolvemos un objeto, nunca undefined
-  return { ok: true };
-}
 
 
 
