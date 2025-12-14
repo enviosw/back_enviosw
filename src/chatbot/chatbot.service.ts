@@ -4993,9 +4993,9 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       st2.pedidoPendienteId = pedidoCreado.id;
       estadoUsuarios.set(telClienteNorm, st2);
 
-      const cuerpo =
-        '🚨 Tu pedido está en espera hasta que haya un domiciliario disponible.\n\n' +
-        'Si no lo necesitas, cancélalo con el botón o escribe *CANCELAR*.';
+const cuerpo =
+  '🚨 *TU PEDIDO ESTÁ EN ESPERA HASTA QUE HAYA UN DOMICILIARIO DISPONIBLE.*\n\n' +
+  '*SI YA NO LO NECESITAS, PUEDES CANCELARLO ESCRIBIENDO* *CANCELAR* *O TOCANDO EL BOTÓN CANCELAR PEDIDO.*';
 
       try {
         await axiosWhatsapp.post('/messages', {
@@ -5268,8 +5268,6 @@ Gracias por tu entrega y compromiso 👏
         if (typeof monto === 'number' && Number.isFinite(monto) && monto === 0) {
           // Caso especial: pedido cancelado
           const mensajeCancelacion = [
-            '❌ *TU PEDIDO FUE CANCELADO CON ÉXITO.*',
-            '',
             '🤖 *GRACIAS POR PREFERIRNOS* 🛵',
             '*¿TIENES UN RECLAMO, SUGERENCIA, AFILIACIÓN O ALGÚN COBRO EXCESIVO?*',
             '📲 *ESCRÍBENOS AL 314 242 3130 Y CON GUSTO TE ATENDEMOS.*'
