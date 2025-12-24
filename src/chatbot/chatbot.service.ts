@@ -3136,11 +3136,7 @@ export class ChatbotService {
           st.esperandoAsignacion = true;
           estadoUsuarios.set(numero, st);
 
-          // ⛳️ Mostrar botón de cancelar INMEDIATO (apenas confirmó)
-          await showCancelar(
-            pedidoBase.id,
-            '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
-          );
+     
 
 
           // 1) Intentar asignar un domiciliario disponible (sin mover turno + cooldown)
@@ -3150,8 +3146,26 @@ export class ChatbotService {
             domiciliario = null;
           }
 
+          if (!domiciliario) {
+         await showCancelar(
+  pedidoBase.id,
+  '🚫❌ *EN ESTE MOMENTO NO HAY DOMICILIARIOS DISPONIBLES.*\n\n' +
+  '⏳ 👉 *SI DESEAS, PUEDES ESPERAR UNOS MINUTOS MIENTRAS UNO SE DESOCUPA Y ASÍ ASIGNAR TU PEDIDO.*\n\n' +
+  '🛵 *domiciliosw.com, tu mejor opción*'
+);
+
+
+            // aquí puedes cortar el flujo si no quieres seguir intentando
+            return;
+          }
+
           // 2) Si HAY domi → pasar a OFERTADO (5) sobre el MISMO pedido
           if (domiciliario) {
+                 // ⛳️ Mostrar botón de cancelar INMEDIATO (apenas confirmó)
+          await showCancelar(
+            pedidoBase.id,
+            '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
+          );
             const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(pedidoBase.id, domiciliario.id);
             if (!ofertado) {
               // Carrera perdida → conservar turno y volver disponible
@@ -3660,7 +3674,7 @@ export class ChatbotService {
 
 
   // ID de la imagen que subiste con /media
-  private readonly ID_IMAGEN_SALUDO = '1302172821671221';  //ejemplo 686382684258783  Reak: 880200348007063
+  private readonly ID_IMAGEN_SALUDO = '899529809307029';  //ejemplo 686382684258783  Reak: 899529809307029
 
   // Envía saludo con IMAGEN + TEXTO CORTO + 3 BOTONES
   private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
@@ -4994,8 +5008,10 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       estadoUsuarios.set(telClienteNorm, st2);
 
 const cuerpo =
-  '🚨 *TU PEDIDO ESTÁ EN ESPERA HASTA QUE HAYA UN DOMICILIARIO DISPONIBLE.*\n\n' +
-  '*SI YA NO LO NECESITAS, PUEDES CANCELARLO ESCRIBIENDO* *CANCELAR* *O TOCANDO EL BOTÓN CANCELAR PEDIDO.*';
+  '🚫❌ *EN ESTE MOMENTO NO HAY DOMICILIARIOS DISPONIBLES.*\n\n' +
+  '⏳ 👉 *SI DESEAS, PUEDES ESPERAR UNOS MINUTOS MIENTRAS UNO SE DESOCUPA Y ASÍ ASIGNAR TU PEDIDO.*\n\n' +
+  '🛵 *domiciliosw.com, tu mejor opción*';
+
 
       try {
         await axiosWhatsapp.post('/messages', {
@@ -5285,9 +5301,9 @@ Gracias por tu entrega y compromiso 👏
                 minimumFractionDigits: 0
               })
               : '$5.000';
-              
+
           // `💵 *TU DOMICILIO ESTÁ EN PROCESO Y TENDRÁ UN COSTO DE ${costoFormateado}*`,
-            // '',
+          // '',
           const mensajeCliente = [
             '🤖 *GRACIAS POR PREFERIRNOS* 🛵',
             '*¿TIENES UN RECLAMO, SUGERENCIA, AFILIACIÓN O ALGÚN COBRO EXCESIVO?*',
