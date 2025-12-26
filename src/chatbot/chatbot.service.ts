@@ -3674,7 +3674,7 @@ export class ChatbotService {
 
 
   // ID de la imagen que subiste con /media
-  private readonly ID_IMAGEN_SALUDO = '899529809307029';  //ejemplo 686382684258783  Reak: 899529809307029
+  private readonly ID_IMAGEN_SALUDO = '719196820950154';  //ejemplo 686382684258783  Reak: 719196820950154
 
   // Envía saludo con IMAGEN + TEXTO CORTO + 3 BOTONES
   private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
