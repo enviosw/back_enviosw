@@ -21,6 +21,7 @@ import { ShortlinksModule } from './shortlinks/shortlinks.module';
 import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
 import { PrecioDomicilioModule } from './common/precio-domicilio.module';
 import { ZonasModule } from './zonas/zonas.module';
+import { PublicidadModule } from './publicidad/publicidad.module';
 
 @Module({
   imports: [
@@ -83,7 +84,9 @@ import { ZonasModule } from './zonas/zonas.module';
     
     PrecioDomicilioModule,
     
-    ZonasModule
+    ZonasModule,
+    
+    PublicidadModule
 
   ],
 })
