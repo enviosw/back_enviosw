@@ -43,7 +43,11 @@ export class Usuario {
   @UpdateDateColumn({ name: 'fecha_actualizacion' })
   fecha_actualizacion: Date;
 
-  @ManyToOne(() => Comercio, (comercio) => comercio.usuarios, { nullable: true })
+  @ManyToOne(() => Comercio, (comercio) => comercio.usuarios, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'comercio_id' })
   comercio: Comercio;
+
 }
