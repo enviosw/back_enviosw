@@ -14,11 +14,17 @@ export class Producto {
   @Column({ nullable: true })
   descripcion: string;
 
-  @ManyToOne(() => Categoria, (categoria) => categoria.productos)
+  @ManyToOne(() => Categoria, (categoria) => categoria.productos, {
+    onDelete: 'CASCADE',
+  })
   categoria: Categoria;
 
-  @ManyToOne(() => Comercio, (comercio) => comercio.productos) // Relación con Comercio
-  comercio: Comercio; // Esta es la propiedad que establece la relación con comercio
+
+  @ManyToOne(() => Comercio, (comercio) => comercio.productos, {
+    onDelete: 'CASCADE',
+  })
+  comercio: Comercio;
+
 
   @Column('decimal')
   precio: number;
