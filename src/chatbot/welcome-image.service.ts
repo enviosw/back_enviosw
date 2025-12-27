@@ -32,11 +32,14 @@ export class WelcomeImageService {
     return this.repo.findOne({ where: { code: 'WELCOME_IMAGE' } });
   }
   
-  private buildPublicUrl(path: string): string {
-    // Elimina /uploads si viene incluido
-    const cleanPath = path.replace(/^\/?uploads\//, '');
-    return `${process.env.APP_URL}/${cleanPath}`;
-  }
+private buildPublicUrl(path: string): string {
+  if (!path) return '';
+
+  // Quita "uploads/" o "/uploads/" si viene incluido
+  const cleanPath = path.replace(/^\/?uploads\//, '');
+
+  return `${process.env.APP_URL}/${cleanPath}`;
+}
 
   
   async getImage2() {
