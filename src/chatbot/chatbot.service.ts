@@ -11,6 +11,7 @@ import { Mensaje } from './entities/mensajes.entity';
 import { Cron, Interval } from '@nestjs/schedule';
 import { stickerConstants } from '../auth/constants/jwt.constant';
 import { PrecioDomicilio } from './entities/precio-domicilio.entity';
+import { WelcomeImageService } from './welcome-image.service';
 
 
 const estadoUsuarios = new Map<string, any>();
@@ -87,7 +88,7 @@ export class ChatbotService {
     private readonly comerciosService: ComerciosService, // 👈 Aquí está la inyección
     private readonly domiciliarioService: DomiciliariosService, // 👈 Aquí está la inyección
     private readonly domiciliosService: DomiciliosService, // 👈 Aquí está la inyección
-
+    private readonly imagenWelcomeService: WelcomeImageService, // 👈 Aquí está la inyección
 
     @InjectRepository(Conversacion)
     private readonly conversacionRepo: Repository<Conversacion>,
@@ -3673,58 +3674,72 @@ export class ChatbotService {
   }
 
 
-  // ID de la imagen que subiste con /media
-  private readonly ID_IMAGEN_SALUDO = '719196820950154';  //ejemplo 686382684258783  Reak: 719196820950154
 
-  // Envía saludo con IMAGEN + TEXTO CORTO + 3 BOTONES
-  private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
 
-    // Texto corto debajo de la imagen
-    const bodyTexto = `👋 Hola ${nombre}, elige tu servicio o pide rápido y fácil en domiciliosw.com`;
+private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
+  const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
 
-    try {
+  try {
+    // 1) Traer la imagen desde DB (ya debe venir con URL limpia si ajustaste el service)
+    const img = await this.imagenWelcomeService.getImage2();
+
+    // img?.path debería ser algo como:
+    // "https://domiciliosw.com/1766785717678.jpeg"
+    const imageLink = `https://domiciliosw.com/api/${img?.path}`.trim() || null;
+
+    // 2) Enviar imagen PRIMERO (si existe)
+    if (imageLink) {
       await axiosWhatsapp.post('/messages', {
         messaging_product: 'whatsapp',
         to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          header: {
-            type: 'image',
-            image: {
-              id: this.ID_IMAGEN_SALUDO // 👈 TU MEDIA ID AQUÍ
-            }
-          },
-          body: {
-            text: bodyTexto
-          },
-          action: {
-            buttons: [
-              {
-                type: 'reply',
-                reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' }
-              },
-              {
-                type: 'reply',
-                reply: { id: 'opcion_2', title: '🛒 Hacer compra' }
-              },
-              {
-                type: 'reply',
-                reply: { id: 'opcion_3', title: '💰 Hacer pago' }
-              }
-            ]
-          }
-        }
+        type: 'image',
+        image: {
+          link: imageLink,
+        },
       });
 
-      this.logger.log(`✅ Saludo con imagen + texto corto + botones enviado a ${numero}`);
-    } catch (error: any) {
-      this.logger.error(
-        '❌ Error al enviar saludo/botones:',
-        error.response?.data || error.message,
-      );
+      this.logger.log(`✅ Imagen enviada a ${numero}: ${imageLink}`);
+    } else {
+      this.logger.warn(`⚠️ No hay imagen de bienvenida registrada, se enviarán solo botones a ${numero}`);
     }
+
+    // 3) Enviar botones DESPUÉS
+    await axiosWhatsapp.post('/messages', {
+      messaging_product: 'whatsapp',
+      to: numero,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: {
+          text: bodyTexto,
+        },
+        action: {
+          buttons: [
+            {
+              type: 'reply',
+              reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' },
+            },
+            {
+              type: 'reply',
+              reply: { id: 'opcion_2', title: '🛒 Hacer compra' },
+            },
+            {
+              type: 'reply',
+              reply: { id: 'opcion_3', title: '💰 Hacer pago' },
+            },
+          ],
+        },
+      },
+    });
+
+    this.logger.log(`✅ Botones enviados a ${numero}`);
+  } catch (error: any) {
+    this.logger.error(
+      '❌ Error al enviar saludo/botones:',
+      error.response?.data || error.message,
+    );
   }
+}
 
 
   async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {

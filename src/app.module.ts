@@ -22,6 +22,7 @@ import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
 import { PrecioDomicilioModule } from './common/precio-domicilio.module';
 import { ZonasModule } from './zonas/zonas.module';
 import { PublicidadModule } from './publicidad/publicidad.module';
+import { WelcomeImageModule } from './chatbot/welcome-image.module';
 
 @Module({
   imports: [
@@ -86,7 +87,8 @@ import { PublicidadModule } from './publicidad/publicidad.module';
     
     ZonasModule,
     
-    PublicidadModule
+    PublicidadModule,
+    WelcomeImageModule
 
   ],
 })

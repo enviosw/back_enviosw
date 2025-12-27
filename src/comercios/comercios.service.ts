@@ -202,7 +202,7 @@ async getById(id: number) {
     search: string = '',
     page: number = 1,
   ): Promise<{ data: Comercio[]; total: number; page: number; lastPage: number }> {
-    const take = 20;
+    const take = 30;
     const skip = (page - 1) * take;
     const subQb = this.comercioRepo
       .createQueryBuilder('comercio')
