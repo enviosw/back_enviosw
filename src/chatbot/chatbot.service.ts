@@ -3680,22 +3680,23 @@ private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void
   const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
 
   try {
-    // 1) Traer la imagen desde DB (ya debe venir con URL limpia si ajustaste el service)
+    // 1) Traer la imagen desde DB
     const img = await this.imagenWelcomeService.getImage2();
 
-    // img?.path debería ser algo como:
-    // "https://domiciliosw.com/1766785717678.jpeg"
-    const imageLink = `https://domiciliosw.com/api/${img?.path}`.trim() || null;
+    // 2) Si no hay path, no intentes enviar imagen
+    const rawPath = img?.path?.toString().trim();
+    const cleanPath = rawPath ? rawPath.replace(/^\/?uploads\//, '') : null;
 
-    // 2) Enviar imagen PRIMERO (si existe)
+    // Si tu endpoint real sirve desde /api/uploads/<archivo>, usa esto:
+    const imageLink = cleanPath ? `https://domiciliosw.com/api/uploads/${cleanPath}` : null;
+
+    // 3) Enviar imagen primero (si existe)
     if (imageLink) {
       await axiosWhatsapp.post('/messages', {
         messaging_product: 'whatsapp',
         to: numero,
         type: 'image',
-        image: {
-          link: imageLink,
-        },
+        image: { link: imageLink },
       });
 
       this.logger.log(`✅ Imagen enviada a ${numero}: ${imageLink}`);
@@ -3703,30 +3704,19 @@ private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void
       this.logger.warn(`⚠️ No hay imagen de bienvenida registrada, se enviarán solo botones a ${numero}`);
     }
 
-    // 3) Enviar botones DESPUÉS
+    // 4) Enviar botones después
     await axiosWhatsapp.post('/messages', {
       messaging_product: 'whatsapp',
       to: numero,
       type: 'interactive',
       interactive: {
         type: 'button',
-        body: {
-          text: bodyTexto,
-        },
+        body: { text: bodyTexto },
         action: {
           buttons: [
-            {
-              type: 'reply',
-              reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' },
-            },
-            {
-              type: 'reply',
-              reply: { id: 'opcion_2', title: '🛒 Hacer compra' },
-            },
-            {
-              type: 'reply',
-              reply: { id: 'opcion_3', title: '💰 Hacer pago' },
-            },
+            { type: 'reply', reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' } },
+            { type: 'reply', reply: { id: 'opcion_2', title: '🛒 Hacer compra' } },
+            { type: 'reply', reply: { id: 'opcion_3', title: '💰 Hacer pago' } },
           ],
         },
       },
@@ -3740,6 +3730,7 @@ private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void
     );
   }
 }
+
 
 
   async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
