@@ -3676,79 +3676,59 @@ export class ChatbotService {
 
 
 
-  private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
-    const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
+private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
+  const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
 
-    try {
-      // 1) Traer la imagen desde DB (ya debe venir con URL limpia si ajustaste el service)
-      const img = await this.imagenWelcomeService.getImage2();
+  // 1️⃣ Intentar enviar imagen (si falla NO rompe el flujo)
+  try {
+    const img = await this.imagenWelcomeService.getImage2();
 
-      console.log('Imagen de bienvenida obtenida:', img);
+    const rawPath = (img?.path ?? '').trim();
+    const cleanPath = rawPath.replace(/^undefined\//, '');
+    const imageLink = cleanPath ? `https://domiciliosw.com/api/${cleanPath}` : null;
 
-      // img?.path debería ser algo como:
-      // "https://domiciliosw.com/1766785717678.jpeg"
-      const rawPath = (img?.path ?? '').trim();
-
-      // quita "undefined/" si viene pegado
-      const cleanPath = rawPath.replace(/^undefined\//, '');
-
-      // solo arma link si realmente hay algo
-      const imageLink = cleanPath ? `https://domiciliosw.com/api/${cleanPath}` : null;
-
-      console.log('Link de imagen para WhatsApp:', imageLink);
-      // 2) Enviar imagen PRIMERO (si existe)
-      if (imageLink) {
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: numero,
-          type: 'image',
-          image: {
-            link: imageLink,
-          },
-        });
-
-        this.logger.log(`✅ Imagen enviada a ${numero}: ${imageLink}`);
-      } else {
-        this.logger.warn(`⚠️ No hay imagen de bienvenida registrada, se enviarán solo botones a ${numero}`);
-      }
-
-      // 3) Enviar botones DESPUÉS
+    if (imageLink) {
       await axiosWhatsapp.post('/messages', {
         messaging_product: 'whatsapp',
         to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: {
-            text: bodyTexto,
-          },
-          action: {
-            buttons: [
-              {
-                type: 'reply',
-                reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' },
-              },
-              {
-                type: 'reply',
-                reply: { id: 'opcion_2', title: '🛒 Hacer compra' },
-              },
-              {
-                type: 'reply',
-                reply: { id: 'opcion_3', title: '💰 Hacer pago' },
-              },
-            ],
-          },
-        },
+        type: 'image',
+        image: { link: imageLink },
       });
 
-      this.logger.log(`✅ Botones enviados a ${numero}`);
-    } catch (error: any) {
-      this.logger.error(
-        '❌ Error al enviar saludo/botones:',
-        error.response?.data || error.message,
-      );
+      this.logger.log(`✅ Imagen enviada a ${numero}`);
+
+      // pequeña pausa para que WhatsApp procese la imagen
+      await new Promise((r) => setTimeout(r, 1200));
     }
+  } catch (error) {
+    this.logger.warn('⚠️ Falló el envío de imagen, se continúa con botones');
   }
+
+  // 2️⃣ SIEMPRE enviar botones (pase lo que pase arriba)
+  try {
+    await axiosWhatsapp.post('/messages', {
+      messaging_product: 'whatsapp',
+      to: numero,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyTexto },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' } },
+            { type: 'reply', reply: { id: 'opcion_2', title: '🛒 Hacer compra' } },
+            { type: 'reply', reply: { id: 'opcion_3', title: '💰 Hacer pago' } },
+          ],
+        },
+      },
+    });
+
+    this.logger.log(`✅ Botones enviados a ${numero}`);
+  } catch (error) {
+    this.logger.error('❌ Error enviando botones:', error.response?.data || error.message);
+  }
+}
+
 
 
   async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
