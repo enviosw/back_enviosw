@@ -3137,7 +3137,7 @@ export class ChatbotService {
           st.esperandoAsignacion = true;
           estadoUsuarios.set(numero, st);
 
-     
+
 
 
           // 1) Intentar asignar un domiciliario disponible (sin mover turno + cooldown)
@@ -3148,12 +3148,12 @@ export class ChatbotService {
           }
 
           if (!domiciliario) {
-         await showCancelar(
-  pedidoBase.id,
-  '🚫❌ *EN ESTE MOMENTO NO HAY DOMICILIARIOS DISPONIBLES.*\n\n' +
-  '⏳ 👉 *SI DESEAS, PUEDES ESPERAR UNOS MINUTOS MIENTRAS UNO SE DESOCUPA Y ASÍ ASIGNAR TU PEDIDO.*\n\n' +
-  '🛵 *domiciliosw.com, tu mejor opción*'
-);
+            await showCancelar(
+              pedidoBase.id,
+              '🚫❌ *EN ESTE MOMENTO NO HAY DOMICILIARIOS DISPONIBLES.*\n\n' +
+              '⏳ 👉 *SI DESEAS, PUEDES ESPERAR UNOS MINUTOS MIENTRAS UNO SE DESOCUPA Y ASÍ ASIGNAR TU PEDIDO.*\n\n' +
+              '🛵 *domiciliosw.com, tu mejor opción*'
+            );
 
 
             // aquí puedes cortar el flujo si no quieres seguir intentando
@@ -3162,11 +3162,11 @@ export class ChatbotService {
 
           // 2) Si HAY domi → pasar a OFERTADO (5) sobre el MISMO pedido
           if (domiciliario) {
-                 // ⛳️ Mostrar botón de cancelar INMEDIATO (apenas confirmó)
-          await showCancelar(
-            pedidoBase.id,
-            '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
-          );
+            // ⛳️ Mostrar botón de cancelar INMEDIATO (apenas confirmó)
+            await showCancelar(
+              pedidoBase.id,
+              '⏳ *ESTAMOS BUSCANDO UN DOMICILIARIO CERCANO A TU DIRECCIÓN PARA ASIGNAR TU PEDIDO LO ANTES POSIBLE.*\n\n🛵 *DOMICILIOSW, TU MEJOR OPCIÓN* 🙌'
+            );
             const ofertado = await this.domiciliosService.marcarOfertadoSiPendiente(pedidoBase.id, domiciliario.id);
             if (!ofertado) {
               // Carrera perdida → conservar turno y volver disponible
@@ -3676,73 +3676,79 @@ export class ChatbotService {
 
 
 
-private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
-  const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
+  private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
+    const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
 
-  try {
-    // 1) Traer la imagen desde DB (ya debe venir con URL limpia si ajustaste el service)
-    const img = await this.imagenWelcomeService.getImage2();
+    try {
+      // 1) Traer la imagen desde DB (ya debe venir con URL limpia si ajustaste el service)
+      const img = await this.imagenWelcomeService.getImage2();
 
-    console.log('Imagen de bienvenida obtenida:', img);
+      console.log('Imagen de bienvenida obtenida:', img);
 
-    // img?.path debería ser algo como:
-    // "https://domiciliosw.com/1766785717678.jpeg"
-    const imageLink = `https://domiciliosw.com/api/${img?.path}`.trim() || null;
+      // img?.path debería ser algo como:
+      // "https://domiciliosw.com/1766785717678.jpeg"
+      const rawPath = (img?.path ?? '').trim();
 
-    console.log('Link de imagen para WhatsApp:', imageLink);
-    // 2) Enviar imagen PRIMERO (si existe)
-    if (imageLink) {
+      // quita "undefined/" si viene pegado
+      const cleanPath = rawPath.replace(/^undefined\//, '');
+
+      // solo arma link si realmente hay algo
+      const imageLink = cleanPath ? `https://domiciliosw.com/api/${cleanPath}` : null;
+
+      console.log('Link de imagen para WhatsApp:', imageLink);
+      // 2) Enviar imagen PRIMERO (si existe)
+      if (imageLink) {
+        await axiosWhatsapp.post('/messages', {
+          messaging_product: 'whatsapp',
+          to: numero,
+          type: 'image',
+          image: {
+            link: imageLink,
+          },
+        });
+
+        this.logger.log(`✅ Imagen enviada a ${numero}: ${imageLink}`);
+      } else {
+        this.logger.warn(`⚠️ No hay imagen de bienvenida registrada, se enviarán solo botones a ${numero}`);
+      }
+
+      // 3) Enviar botones DESPUÉS
       await axiosWhatsapp.post('/messages', {
         messaging_product: 'whatsapp',
         to: numero,
-        type: 'image',
-        image: {
-          link: imageLink,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: {
+            text: bodyTexto,
+          },
+          action: {
+            buttons: [
+              {
+                type: 'reply',
+                reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' },
+              },
+              {
+                type: 'reply',
+                reply: { id: 'opcion_2', title: '🛒 Hacer compra' },
+              },
+              {
+                type: 'reply',
+                reply: { id: 'opcion_3', title: '💰 Hacer pago' },
+              },
+            ],
+          },
         },
       });
 
-      this.logger.log(`✅ Imagen enviada a ${numero}: ${imageLink}`);
-    } else {
-      this.logger.warn(`⚠️ No hay imagen de bienvenida registrada, se enviarán solo botones a ${numero}`);
+      this.logger.log(`✅ Botones enviados a ${numero}`);
+    } catch (error: any) {
+      this.logger.error(
+        '❌ Error al enviar saludo/botones:',
+        error.response?.data || error.message,
+      );
     }
-
-    // 3) Enviar botones DESPUÉS
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: numero,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: {
-          text: bodyTexto,
-        },
-        action: {
-          buttons: [
-            {
-              type: 'reply',
-              reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' },
-            },
-            {
-              type: 'reply',
-              reply: { id: 'opcion_2', title: '🛒 Hacer compra' },
-            },
-            {
-              type: 'reply',
-              reply: { id: 'opcion_3', title: '💰 Hacer pago' },
-            },
-          ],
-        },
-      },
-    });
-
-    this.logger.log(`✅ Botones enviados a ${numero}`);
-  } catch (error: any) {
-    this.logger.error(
-      '❌ Error al enviar saludo/botones:',
-      error.response?.data || error.message,
-    );
   }
-}
 
 
   async opcion1PasoAPaso(numero: string, mensaje: string): Promise<void> {
@@ -5025,10 +5031,10 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
       st2.pedidoPendienteId = pedidoCreado.id;
       estadoUsuarios.set(telClienteNorm, st2);
 
-const cuerpo =
-  '🚫❌ *EN ESTE MOMENTO NO HAY DOMICILIARIOS DISPONIBLES.*\n\n' +
-  '⏳ 👉 *SI DESEAS, PUEDES ESPERAR UNOS MINUTOS MIENTRAS UNO SE DESOCUPA Y ASÍ ASIGNAR TU PEDIDO.*\n\n' +
-  '🛵 *domiciliosw.com, tu mejor opción*';
+      const cuerpo =
+        '🚫❌ *EN ESTE MOMENTO NO HAY DOMICILIARIOS DISPONIBLES.*\n\n' +
+        '⏳ 👉 *SI DESEAS, PUEDES ESPERAR UNOS MINUTOS MIENTRAS UNO SE DESOCUPA Y ASÍ ASIGNAR TU PEDIDO.*\n\n' +
+        '🛵 *domiciliosw.com, tu mejor opción*';
 
 
       try {
