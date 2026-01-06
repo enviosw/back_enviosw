@@ -11,10 +11,11 @@ import { ChatService } from './chat.service';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrecioDomicilio } from './entities/precio-domicilio.entity';
 import { WelcomeImageModule } from './welcome-image.module';
+import { PhonesModule } from './phones.module';
 
 @Module({
   imports: [    ScheduleModule.forRoot(), // 👈 habilita cron/interval/timeout
-ComerciosModule, DomiliariosModule, DomiciliosModule,    WelcomeImageModule, TypeOrmModule.forFeature([Conversacion, Mensaje, PrecioDomicilio])
+ComerciosModule, DomiliariosModule, DomiciliosModule,    WelcomeImageModule, PhonesModule,TypeOrmModule.forFeature([Conversacion, Mensaje, PrecioDomicilio])
 ],
   controllers: [ChatbotController],
   providers: [ChatbotService, ChatService],

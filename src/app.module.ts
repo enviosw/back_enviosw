@@ -23,6 +23,7 @@ import { PrecioDomicilioModule } from './common/precio-domicilio.module';
 import { ZonasModule } from './zonas/zonas.module';
 import { PublicidadModule } from './publicidad/publicidad.module';
 import { WelcomeImageModule } from './chatbot/welcome-image.module';
+import { PhonesModule } from './chatbot/phones.module';
 
 @Module({
   imports: [
@@ -88,7 +89,10 @@ import { WelcomeImageModule } from './chatbot/welcome-image.module';
     ZonasModule,
     
     PublicidadModule,
-    WelcomeImageModule
+
+    WelcomeImageModule,
+    
+    PhonesModule
 
   ],
 })

@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { ServiciosService } from '../servicios/servicios.service';
 import { RolesService } from '../roles/roles.service';
+import { PhonesService } from '../chatbot/phones.service';
 
 // importa más servicios si necesitas (ej: RoleService)
 
@@ -24,6 +25,8 @@ async function bootstrap() {
   await seedUsuarios(app);
   await seedServicios(app);
   await seedRoles(app);
+  await seedTelefonos(app);
+
   // await seedRoles(app); // otros seeders aquí
 
   console.log('✅ Seeders completados.');
@@ -149,6 +152,41 @@ async function seedRoles(app) {
     }
   }
 }
+
+
+async function seedTelefonos(app) {
+  const phonesService = app.get(PhonesService);
+
+  const telefonosData = [
+    { key: 'CUENTAS', value: '573108054942' },
+    { key: 'QUEJAS',  value: '573228689914' },
+  ];
+
+  for (const telefono of telefonosData) {
+    try {
+      const existente = await phonesService.findByKey(telefono.key);
+
+      if (existente) {
+        console.log(`⚠️ Teléfono ${telefono.key} ya existe.`);
+        continue;
+      }
+
+      await phonesService.createFromSeed({
+        key: telefono.key,
+        value: telefono.value,
+      });
+
+      console.log(`✅ Teléfono ${telefono.key} creado.`);
+    } catch (error) {
+      console.error(
+        `❌ Error creando teléfono ${telefono.key}:`,
+        error.message,
+      );
+    }
+  }
+}
+
+
 // Puedes seguir agregando funciones como esta:
 // async function seedRoles(app) { ... }
 

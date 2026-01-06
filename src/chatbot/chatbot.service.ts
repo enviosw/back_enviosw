@@ -12,7 +12,7 @@ import { Cron, Interval } from '@nestjs/schedule';
 import { stickerConstants } from '../auth/constants/jwt.constant';
 import { PrecioDomicilio } from './entities/precio-domicilio.entity';
 import { WelcomeImageService } from './welcome-image.service';
-
+import { PhonesService } from './phones.service';
 
 const estadoUsuarios = new Map<string, any>();
 const temporizadoresInactividad = new Map<string, NodeJS.Timeout>(); // ⏰ Temporizadores
@@ -53,7 +53,7 @@ const ESTADOS_ABIERTOS = [0, 5, 1]; // pendiente, ofertado, asignado
 const BOTON_SET_ZONA_1_DISP = 'set_zona_1_disponible'; // Centro (id=1) + disponible=true
 const BOTON_SET_ZONA_2_DISP = 'set_zona_2_disponible'; // Solarte (id=2) + disponible=true
 
-const ASESOR_PSQR = '573142423130';
+// const ASESOR_PSQR = '573142423130';
 
 const TRIGGER_PALABRA_CLAVE = '1';
 // 👉 Si mañana agregas más stickers, solo pon sus SHA aquí:
@@ -80,7 +80,7 @@ export class ChatbotService {
 
   private readonly logger = new Logger(ChatbotService.name);
   private isRetryRunning = false; // 🔒 candado antisolape
-  private readonly numeroNotificaciones = '573108054942'; // 👈 número fijo destino
+
   private readonly notifsPrecioCache = new Map<string, number>(); // idempotencia
   private readonly NOTIF_PRECIO_TTL_MS = 300_000; // 5 min para evitar duplicados
 
@@ -89,6 +89,7 @@ export class ChatbotService {
     private readonly domiciliarioService: DomiciliariosService, // 👈 Aquí está la inyección
     private readonly domiciliosService: DomiciliosService, // 👈 Aquí está la inyección
     private readonly imagenWelcomeService: WelcomeImageService, // 👈 Aquí está la inyección
+    private readonly phonesService: PhonesService, // ✅ NUEVO
 
     @InjectRepository(Conversacion)
     private readonly conversacionRepo: Repository<Conversacion>,
@@ -872,6 +873,9 @@ export class ChatbotService {
 
 
 
+
+
+
   // ✅ Guardia único: ¿está en cualquier flujo o puente?
   private estaEnCualquierFlujo(numero: string): boolean {
     const st = estadoUsuarios.get(numero);
@@ -896,6 +900,10 @@ export class ChatbotService {
       return;
     }
 
+    const numeroCuentas =
+      (await this.phonesService.getNumeroByKey('CUENTAS')) ??
+      '573108054942'; // fallback seguro
+
 
 
 
@@ -906,8 +914,10 @@ export class ChatbotService {
 
 
 
+
+
     // En la parte superior de procesarMensajeEntrante, justo después de definir const numero = mensaje?.from;
-    if (numero === this.numeroNotificaciones) {
+    if (numero === numeroCuentas) {
       await this.enviarMensajeTexto(numero, '👋 Hola Wilber');
 
       await this.enviarSticker(numero, String(stickerConstants.stickerId))
@@ -2916,12 +2926,12 @@ export class ChatbotService {
           this.notifsPrecioCache.set(idemKey, now);
 
           // Intentar notificar, pero que NO bloquee el flujo si falla
-          const debeNotificar = Boolean(this.numeroNotificaciones && String(this.numeroNotificaciones).trim());
+          const debeNotificar = Boolean(numeroCuentas && String(numeroCuentas).trim());
           if (debeNotificar) {
             try {
               await axiosWhatsapp.post('/messages', {
                 messaging_product: 'whatsapp',
-                to: this.numeroNotificaciones,
+                to: numeroCuentas,
                 type: 'text',
                 text: {
                   body:
@@ -3676,58 +3686,58 @@ export class ChatbotService {
 
 
 
-private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
-  const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
+  private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void> {
+    const bodyTexto = `👋 Hola ${nombre}, elige tu\n servicio o pide rápido y fácil en\n domiciliosw.com`;
 
-  // 1️⃣ Intentar enviar imagen (si falla NO rompe el flujo)
-  try {
-    const img = await this.imagenWelcomeService.getImage2();
+    // 1️⃣ Intentar enviar imagen (si falla NO rompe el flujo)
+    try {
+      const img = await this.imagenWelcomeService.getImage2();
 
-    const rawPath = (img?.path ?? '').trim();
-    const cleanPath = rawPath.replace(/^undefined\//, '');
-    const imageLink = cleanPath ? `https://domiciliosw.com/api/${cleanPath}` : null;
+      const rawPath = (img?.path ?? '').trim();
+      const cleanPath = rawPath.replace(/^undefined\//, '');
+      const imageLink = cleanPath ? `https://domiciliosw.com/api/${cleanPath}` : null;
 
-    if (imageLink) {
+      if (imageLink) {
+        await axiosWhatsapp.post('/messages', {
+          messaging_product: 'whatsapp',
+          to: numero,
+          type: 'image',
+          image: { link: imageLink },
+        });
+
+        this.logger.log(`✅ Imagen enviada a ${numero}`);
+
+        // pequeña pausa para que WhatsApp procese la imagen
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+    } catch (error) {
+      this.logger.warn('⚠️ Falló el envío de imagen, se continúa con botones');
+    }
+
+    // 2️⃣ SIEMPRE enviar botones (pase lo que pase arriba)
+    try {
       await axiosWhatsapp.post('/messages', {
         messaging_product: 'whatsapp',
         to: numero,
-        type: 'image',
-        image: { link: imageLink },
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: bodyTexto },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' } },
+              { type: 'reply', reply: { id: 'opcion_2', title: '🛒 Hacer compra' } },
+              { type: 'reply', reply: { id: 'opcion_3', title: '💰 Hacer pago' } },
+            ],
+          },
+        },
       });
 
-      this.logger.log(`✅ Imagen enviada a ${numero}`);
-
-      // pequeña pausa para que WhatsApp procese la imagen
-      await new Promise((r) => setTimeout(r, 1200));
+      this.logger.log(`✅ Botones enviados a ${numero}`);
+    } catch (error) {
+      this.logger.error('❌ Error enviando botones:', error.response?.data || error.message);
     }
-  } catch (error) {
-    this.logger.warn('⚠️ Falló el envío de imagen, se continúa con botones');
   }
-
-  // 2️⃣ SIEMPRE enviar botones (pase lo que pase arriba)
-  try {
-    await axiosWhatsapp.post('/messages', {
-      messaging_product: 'whatsapp',
-      to: numero,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: bodyTexto },
-        action: {
-          buttons: [
-            { type: 'reply', reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' } },
-            { type: 'reply', reply: { id: 'opcion_2', title: '🛒 Hacer compra' } },
-            { type: 'reply', reply: { id: 'opcion_3', title: '💰 Hacer pago' } },
-          ],
-        },
-      },
-    });
-
-    this.logger.log(`✅ Botones enviados a ${numero}`);
-  } catch (error) {
-    this.logger.error('❌ Error enviando botones:', error.response?.data || error.message);
-  }
-}
 
 
 
@@ -4330,6 +4340,11 @@ private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void
 
   // ===== FUNCIÓN COMPLETA AJUSTADA =====
   private async cancelarPedidoDesdeCliente(numero: string): Promise<void> {
+
+    const numeroQuejas =
+      (await this.phonesService.getNumeroByKey('QUEJAS')) ??
+      '573228689914'; // fallback seguro
+
     try {
       const st = estadoUsuarios.get(numero) || {};
       const pedidoId: number | undefined = st.pedidoId;
@@ -4392,9 +4407,9 @@ private async enviarSaludoYBotones(numero: string, nombre: string): Promise<void
 Para no dejarte sin servicio, te compartimos opciones adicionales:
 📞 3144403062 – Veloz
 📞 3137057041 – Rapigo
-📞 3142423130 – Enviosw
+📞 ${numeroQuejas.slice(2)} – Enviosw
 
-🚀 Así podrás realizar tu envío de manera rápida y segura.`
+🚀 Así podrás realizar tu envío de manera rápida y segura.`,
       );
 
     } catch (err: any) {
@@ -5283,6 +5298,10 @@ Gracias por tu entrega y compromiso 👏
     // 2) Mensajes al CLIENTE
     //    SOLO si NO había finalizado antes
     // ================================
+    const numeroQuejas =
+      (await this.phonesService.getNumeroByKey('QUEJAS')) ??
+      '573228689914'; // fallback seguro
+
     if (!yaFinalizadaAntes) {
       try {
         if (typeof monto === 'number' && Number.isFinite(monto) && monto === 0) {
@@ -5290,7 +5309,7 @@ Gracias por tu entrega y compromiso 👏
           const mensajeCancelacion = [
             '🤖 *GRACIAS POR PREFERIRNOS* 🛵',
             '*¿TIENES UN RECLAMO, SUGERENCIA, AFILIACIÓN O ALGÚN COBRO EXCESIVO?*',
-            '📲 *ESCRÍBENOS AL 314 242 3130 Y CON GUSTO TE ATENDEMOS.*'
+            `📲 *ESCRÍBENOS AL ${numeroQuejas.slice(2)} Y CON GUSTO TE ATENDEMOS.*`
           ].join('\n');
 
           await this.enviarMensajeTexto(cliente, mensajeCancelacion);
@@ -5306,12 +5325,10 @@ Gracias por tu entrega y compromiso 👏
               })
               : '$5.000';
 
-          // `💵 *TU DOMICILIO ESTÁ EN PROCESO Y TENDRÁ UN COSTO DE ${costoFormateado}*`,
-          // '',
           const mensajeCliente = [
             '🤖 *GRACIAS POR PREFERIRNOS* 🛵',
             '*¿TIENES UN RECLAMO, SUGERENCIA, AFILIACIÓN O ALGÚN COBRO EXCESIVO?*',
-            '📲 *ESCRÍBENOS AL 314 242 3130 Y CON GUSTO TE ATENDEMOS.*'
+            `📲 *ESCRÍBENOS AL ${numeroQuejas.slice(2)} Y CON GUSTO TE ATENDEMOS.*`
           ].join('\n');
 
           await this.enviarMensajeTexto(cliente, mensajeCliente);
@@ -5324,6 +5341,7 @@ Gracias por tu entrega y compromiso 👏
         );
       }
     }
+
 
     // ================================
     // 3) Cierre del pedido / estado 7
@@ -5392,13 +5410,18 @@ Gracias por tu entrega y compromiso 👏
 
   // ⚙️ Crear/activar puente de soporte con asesor PSQR
   private async iniciarSoportePSQR(numeroCliente: string, nombreCliente?: string) {
+
+    const numeroQuejas =
+      (await this.phonesService.getNumeroByKey('QUEJAS')) ??
+      '573228689914'; // fallback seguro
+
     // 1) Saludo bonito al cliente
     const msgCliente = [
       '🛟 *Soporte DomiciliosW (PSQR)*',
       '✅ Ya un asesor de *DomiciliosW* está en contacto contigo.',
       '',
       '👩‍💼 *Asesor asignado:*',
-      `📞 ${ASESOR_PSQR}`,
+      `📞 ${numeroQuejas}`,
       '',
       '✍️ Escribe tu caso aquí. Te responderemos en este mismo chat.',
       '❌ Escribe *salir* para terminar la conversación.'
@@ -5417,25 +5440,30 @@ Gracias por tu entrega y compromiso 👏
       '🧷 Escribe *salir* cuando cierres el caso.',
     ].join('\n');
 
-    await this.enviarMensajeTexto(ASESOR_PSQR, msgAsesor);
+    await this.enviarMensajeTexto(numeroQuejas, msgAsesor);
 
     // 3) Registra el "puente" en memoria para rutear mensajes
     const convId = `psqr-${Date.now()}-${numeroCliente}`; // id lógico para el puente
     const stCliente = estadoUsuarios.get(numeroCliente) || {};
     stCliente.soporteActivo = true;
     stCliente.soporteConversacionId = convId;
-    stCliente.soporteAsesor = ASESOR_PSQR;
+    stCliente.soporteAsesor = numeroQuejas;
     estadoUsuarios.set(numeroCliente, stCliente);
 
-    const stAsesor = estadoUsuarios.get(ASESOR_PSQR) || {};
+    const stAsesor = estadoUsuarios.get(numeroQuejas) || {};
     stAsesor.soporteActivo = true;
     stAsesor.soporteConversacionId = convId;
     stAsesor.soporteCliente = numeroCliente;
-    estadoUsuarios.set(ASESOR_PSQR, stAsesor);
+    estadoUsuarios.set(numeroQuejas, stAsesor);
   }
 
   // ⚙️ Crear/activar puente de afiliación con el mismo asesor PSQR
   private async iniciarAfiliacionAliado(numeroCliente: string, nombreCliente?: string) {
+
+    const numeroQuejas =
+      (await this.phonesService.getNumeroByKey('QUEJAS')) ??
+      '573228689914'; // fallback seguro
+
     // 1️⃣ Mensaje al cliente
     const msgCliente = [
       '🤝 *AFILIACIONES DOMICILIOSW*',
@@ -5463,7 +5491,7 @@ Gracias por tu entrega y compromiso 👏
       '🧷 Escribe *cerrar* cuando cierres el caso.'
     ].join('\n');
 
-    await this.enviarMensajeTexto(ASESOR_PSQR, msgAsesor);
+    await this.enviarMensajeTexto(numeroQuejas, msgAsesor);
 
     // 3️⃣ Registrar el puente en memoria (igual que PSQR)
     const convId = `afiliacion-${Date.now()}-${numeroCliente}`;
@@ -5471,19 +5499,23 @@ Gracias por tu entrega y compromiso 👏
     const stCliente = estadoUsuarios.get(numeroCliente) || {};
     stCliente.afiliacionActiva = true;
     stCliente.afiliacionConversacionId = convId;
-    stCliente.afiliacionAsesor = ASESOR_PSQR;
+    stCliente.afiliacionAsesor = numeroQuejas;
     estadoUsuarios.set(numeroCliente, stCliente);
 
-    const stAsesor = estadoUsuarios.get(ASESOR_PSQR) || {};
+    const stAsesor = estadoUsuarios.get(numeroQuejas) || {};
     stAsesor.afiliacionActiva = true;
     stAsesor.afiliacionConversacionId = convId;
     stAsesor.afiliacionCliente = numeroCliente;
-    estadoUsuarios.set(ASESOR_PSQR, stAsesor);
+    estadoUsuarios.set(numeroQuejas, stAsesor);
   }
 
 
   // 🧹 Finaliza el puente PSQR sin importar quién envía "salir"
   private async finalizarSoportePSQRPorCualquiera(quienEscribe: string) {
+    const numeroQuejas =
+      (await this.phonesService.getNumeroByKey('QUEJAS')) ??
+      '573228689914'; // fallback seguro
+
     const st = estadoUsuarios.get(quienEscribe);
     const convId = st?.soporteConversacionId;
 
@@ -5492,7 +5524,7 @@ Gracias por tu entrega y compromiso 👏
     let asesor = st?.soporteAsesor ? st.soporteAsesor : (st?.soporteCliente ? quienEscribe : null);
 
     // Fallback por si el asesor es el fijo ASESOR_PSQR
-    if (!asesor && st?.soporteConversacionId) asesor = ASESOR_PSQR;
+    if (!asesor && st?.soporteConversacionId) asesor = numeroQuejas;
 
     if (!convId || !cliente || !asesor) {
       // Nada que cerrar
@@ -5527,6 +5559,11 @@ Gracias por tu entrega y compromiso 👏
 
   // 🧹 Finaliza el puente de AFILIACIONES sin importar quién envía "salir"
   private async finalizarAfiliacionPorCualquiera(quienEscribe: string) {
+
+    const numeroQuejas =
+      (await this.phonesService.getNumeroByKey('QUEJAS')) ??
+      '573228689914'; // fallback seguro
+
     const st = estadoUsuarios.get(quienEscribe);
     const convId = st?.afiliacionConversacionId;
 
@@ -5535,7 +5572,7 @@ Gracias por tu entrega y compromiso 👏
     let asesor = st?.afiliacionAsesor ? st.afiliacionAsesor : (st?.afiliacionCliente ? quienEscribe : null);
 
     // Fallback por si el asesor es el fijo ASESOR_PSQR
-    if (!asesor && st?.afiliacionConversacionId) asesor = ASESOR_PSQR;
+    if (!asesor && st?.afiliacionConversacionId) asesor = numeroQuejas;
 
     if (!convId || !cliente || !asesor) {
       // Nada que cerrar
