@@ -366,6 +366,7 @@ export class DomiciliosService {
       await qr.release();
     }
   }
+  
   async marcarEntregadoSiAsignado(pedidoId: number, domiId?: number): Promise<boolean> {
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(Domicilio);

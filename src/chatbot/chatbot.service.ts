@@ -13,6 +13,7 @@ import { stickerConstants } from '../auth/constants/jwt.constant';
 import { PrecioDomicilio } from './entities/precio-domicilio.entity';
 import { WelcomeImageService } from './welcome-image.service';
 import { PhonesService } from './phones.service';
+import { ChatService } from './chat.service';
 
 const estadoUsuarios = new Map<string, any>();
 const temporizadoresInactividad = new Map<string, NodeJS.Timeout>(); // ⏰ Temporizadores
@@ -90,6 +91,7 @@ export class ChatbotService {
     private readonly domiciliosService: DomiciliosService, // 👈 Aquí está la inyección
     private readonly imagenWelcomeService: WelcomeImageService, // 👈 Aquí está la inyección
     private readonly phonesService: PhonesService, // ✅ NUEVO
+    private readonly chatService: ChatService, // 👈 INYECTADO
 
     @InjectRepository(Conversacion)
     private readonly conversacionRepo: Repository<Conversacion>,
@@ -176,6 +178,10 @@ export class ChatbotService {
       await this.domiciliosService.vaciarTablaYReiniciarIds(); // <-- método Opción A (Postgres)
 
       this.logger.log('✅ Reinicio de domicilios');
+
+       await this.chatService.vaciarChatsYReiniciarIds();
+      this.logger.log('✅ Reinicio de chats (mensajes + conversaciones)');
+
     } catch (err: any) {
       this.logger.error(`❌ Falló el reinicio de turnos: ${err?.message || err}`);
     }
