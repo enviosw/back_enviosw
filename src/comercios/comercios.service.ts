@@ -5,7 +5,7 @@ import { Comercio } from './entities/comercio.entity';
 import { CreateComercioDto } from './dto/create-comercio.dto';
 import { UpdateComercioDto } from './dto/update-comercio.dto';
 import { ComercioQuery } from './interfaces/comercio.interface';
-import { Zona } from 'src/zonas/entities/zona.entity';
+import { Zona } from '../zonas/entities/zona.entity';
 
 @Injectable()
 export class ComerciosService {
