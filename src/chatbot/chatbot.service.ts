@@ -26,33 +26,24 @@ function isExpired(ts?: number) {
   return !ts || Date.now() >= ts;
 }
 
-// Sesiones de confirmación de sticker por número (tel normalizado) → { nonce, used, expiresAt }
-const stickerConfirmSessions = new Map<string, { nonce: string; used: boolean; expiresAt: number }>();
-const STICKER_CONFIRM_TTL_MS = 25 * 60 * 1000; // 5 min de validez
-
-
-const limpiarNombre = (s?: string) =>
-  String(s ?? '')
-    .replace(/\s+/g, ' ')
-    .replace(/^[:\-–—\s]+|[:\-–—\s]+$/g, '')
-    .trim();
 
 type VigenciaOferta = { expira: number; domi: string };
 const ofertasVigentes = new Map<number, VigenciaOferta>(); // pedidoId -> vigencia
 const OFERTA_TIMEOUT_MS = 120_000;
 
 // 👇 IDs de botones que usaremos
-const BTN_STICKER_CONFIRM_SI = 'sticker_confirmar_si';
-const BTN_STICKER_CONFIRM_NO = 'sticker_confirmar_no';
+// const BTN_STICKER_CONFIRM_SI = 'sticker_confirmar_si';
+// const BTN_STICKER_CONFIRM_NO = 'sticker_confirmar_no';
 
-const BTN_STICKER_CREAR_SI = 'sticker_crear_otro_si';
-const BTN_STICKER_CREAR_NO = 'sticker_crear_otro_no';
+// const BTN_STICKER_CREAR_SI = 'sticker_crear_otro_si';
+// const BTN_STICKER_CREAR_NO = 'sticker_crear_otro_no';
 
-const ESTADOS_ABIERTOS = [0, 5, 1]; // pendiente, ofertado, asignado
+const BTN_STICKER_CONFIRM_SI = 'stk_ok';
+const BTN_STICKER_CONFIRM_NO = 'stk_cancel';
 
-// IDs para los botones de zona cuando elige "disponible"
-const BOTON_SET_ZONA_1_DISP = 'set_zona_1_disponible'; // Centro (id=1) + disponible=true
-const BOTON_SET_ZONA_2_DISP = 'set_zona_2_disponible'; // Solarte (id=2) + disponible=true
+const BTN_STICKER_CREAR_SI = 'stk_new_ok';
+const BTN_STICKER_CREAR_NO = 'stk_new_no';
+
 
 // const ASESOR_PSQR = '573142423130';
 
@@ -103,6 +94,80 @@ export class ChatbotService {
     private readonly precioRepo: Repository<PrecioDomicilio>,
 
   ) { }
+
+
+
+  private waTo(raw: any): string {
+    const d = String(raw ?? '').replace(/\D/g, '');
+    if (d.length === 10) return `57${d}`;
+    return d; // ya viene con 57 normalmente
+  }
+
+  private async sendButtons(
+    toRaw: any,
+    bodyText: string,
+    buttons: Array<{ id: string; title: string }>
+  ) {
+    const to = this.waTo(toRaw ?? '');
+
+    if (!/^\d{11,15}$/.test(to)) {
+      this.logger.warn(`⚠️ Botones NO enviados: to inválido raw="${toRaw}" to="${to}"`);
+      return;
+    }
+
+    const safeBody = String(bodyText ?? '').trim().slice(0, 1024);
+    if (!safeBody) {
+      this.logger.warn(`⚠️ Botones NO enviados: body vacío to="${to}"`);
+      return;
+    }
+
+    const safeButtons = buttons
+      .slice(0, 3)
+      .map(b => ({
+        type: 'reply' as const,
+        reply: {
+          id: String(b.id ?? '').slice(0, 256),
+          title: String(b.title ?? '')
+            .replace(/[^\p{L}\p{N}\s.,!?-]/gu, '')
+            .trim()
+            .slice(0, 20),
+        },
+      }))
+      .filter(b => b.reply.id && b.reply.title);
+
+    if (safeButtons.length === 0) {
+      this.logger.warn(`⚠️ Botones NO enviados: todos inválidos (title vacío) to="${to}"`);
+      return;
+    }
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: safeBody },
+        action: { buttons: safeButtons },
+      },
+    };
+
+    try {
+      this.logger.debug(`📤 WA OUT interactive: ${JSON.stringify(payload)}`);
+      const res = await axiosWhatsapp.post('/messages', payload, { timeout: 7000 });
+      this.logger.log(`✅ Botones enviados a ${to} id=${res?.data?.messages?.[0]?.id ?? 'n/a'}`);
+    } catch (e: any) {
+      const data = e?.response?.data;
+      this.logger.error('❌ WA ERROR interactive', {
+        to,
+        fbtrace_id: data?.error?.fbtrace_id,
+        details: data?.error?.error_data?.details,
+        message: data?.error?.message || e?.message,
+        payload,
+      });
+    }
+  }
+
+
 
   // ⏰ Cierre por inactividad (10 min)
   // No aplica si hay conversación activa o si el pedido está confirmado / esperando asignación
@@ -179,7 +244,7 @@ export class ChatbotService {
 
       this.logger.log('✅ Reinicio de domicilios');
 
-       await this.chatService.vaciarChatsYReiniciarIds();
+      await this.chatService.vaciarChatsYReiniciarIds();
       this.logger.log('✅ Reinicio de chats (mensajes + conversaciones)');
 
     } catch (err: any) {
@@ -391,28 +456,14 @@ export class ChatbotService {
             const bodySoloDetalles = this.sanitizeWaBody(mensajeAuto).slice(0, 1024); // límite seguro
 
             // Enviar OFERTA al domi con botones (sin encabezados extras)
-            try {
-              await axiosWhatsapp.post('/messages', {
-                messaging_product: 'whatsapp',
-                to: domiciliario.telefono_whatsapp,
-                type: 'interactive',
-                interactive: {
-                  type: 'button',
-                  body: { text: bodySoloDetalles },
-                  action: {
-                    buttons: [
-                      { type: 'reply', reply: { id: `ACEPTAR_${pedido.id}`, title: '✅ Aceptar' } },
-                      { type: 'reply', reply: { id: `RECHAZAR_${pedido.id}`, title: '❌ Rechazar' } },
-                    ],
-                  },
-                },
-              }, { timeout: 7000 });
-            } catch (e: any) {
-              this.logger.warn(
-                `⚠️ Falló oferta AUTO al domi ${domiciliario.telefono_whatsapp} p=${pedido.id}: ` +
-                (e?.response?.data?.error?.message || e?.message || e)
-              );
-            }
+            await this.sendButtons(
+              domiciliario.telefono_whatsapp,
+              bodySoloDetalles,
+              [
+                { id: `ACEPTAR_${pedido.id}`, title: 'Aceptar' },
+                { id: `RECHAZAR_${pedido.id}`, title: 'Rechazar' },
+              ]
+            );
 
             // Registrar oferta + timeout de expiración
             ofertasVigentes.set(pedido.id, {
@@ -490,27 +541,14 @@ export class ChatbotService {
               ].join('\n')
             ).slice(0, 1024); // límite seguro para body de botones
 
-            try {
-              await axiosWhatsapp.post('/messages', {
-                messaging_product: 'whatsapp',
-                to: domiciliario.telefono_whatsapp,
-                type: 'interactive',
-                interactive: {
-                  type: 'button',
-                  body: { text: resumenLargo },
-                  action: {
-                    buttons: [
-                      { type: 'reply', reply: { id: `ACEPTAR_${pedido.id}`, title: '✅ Aceptar' } },
-                      { type: 'reply', reply: { id: `RECHAZAR_${pedido.id}`, title: '❌ Rechazar' } },
-                    ],
-                  },
-                },
-              }, { timeout: 7000 });
-            } catch (e: any) {
-              this.logger.warn(
-                `⚠️ Falló oferta de compras al domi ${domiciliario.telefono_whatsapp} p=${pedido.id}: ${e?.response?.data?.error?.message || e?.message || e}`
-              );
-            }
+            await this.sendButtons(
+              domiciliario.telefono_whatsapp,
+              resumenLargo,
+              [
+                { id: `ACEPTAR_${pedido.id}`, title: 'Aceptar' },
+                { id: `RECHAZAR_${pedido.id}`, title: 'Rechazar' },
+              ]
+            );
 
             // Guardar oferta + timeout (usa tu misma lógica)
             ofertasVigentes.set(pedido.id, {
@@ -1382,21 +1420,15 @@ export class ChatbotService {
           `🧾 *Precio detectado:* ${monto.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
         );
 
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: numero,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: '¿Confirmas este valor?' },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: 'confirmar_precio_si', title: '✅ Sí, Finalizar' } },
-                { type: 'reply', reply: { id: 'confirmar_precio_no', title: '↩️ No, reingresar' } },
-              ],
-            },
-          },
-        });
+        await this.sendButtons(
+          numero,
+          '¿Confirmas este valor?',
+          [
+            { id: 'confirmar_precio_si', title: 'Si finalizar' },
+            { id: 'confirmar_precio_no', title: 'Reingresar' },
+          ]
+        );
+
 
         return; // detenemos el flujo normal hasta confirmar
       }
@@ -1527,16 +1559,15 @@ export class ChatbotService {
             { type: 'reply', reply: { id: 'mantener_estado', title: keepLbl } },
           ];
 
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: numero,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: 'Elige una opción:' },
-            action: { buttons },
-          },
-        });
+        await this.sendButtons(
+          numero,
+          'Elige una opción:',
+          buttons.map((b: any) => ({
+            id: b.reply.id,
+            title: b.reply.title,
+          }))
+        );
+
       } catch (e: any) {
         this.logger.warn(`⚠️ Falló el envío de botones a ${numero}: ${e?.response?.data?.error?.message || e?.message || e}`);
 
@@ -1849,28 +1880,14 @@ export class ChatbotService {
           return;
         }
 
-        // Mostrar confirmación SÍ/NO
-        try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: numero,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '¿Seguro que deseas finalizar el pedido?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'fin_domi', title: '✅ Sí, finalizar' } }
-                ],
-              },
-            },
-          });
-        } catch (e) {
-          this.logger.warn(
-            `⚠️ Falló envío de confirmación de fin: ` +
-            (e?.response?.data?.error?.message || e?.message || e)
-          );
-        }
+        await this.sendButtons(
+          numero,
+          '¿Seguro que deseas finalizar el pedido?',
+          [
+            { id: 'fin_domi', title: 'Finalizar' },
+          ]
+        );
+
         return;
       }
 
@@ -1896,30 +1913,14 @@ export class ChatbotService {
 
           // Si el mensaje lo envía el CLIENTE, mandamos el botón de finalizar al DOMI
           if (esCliente) {
-            try {
-              await axiosWhatsapp.post('/messages', {
-                messaging_product: 'whatsapp',
-                to: receptor, // DOMICILIARIO
-                type: 'interactive',
-                interactive: {
-                  type: 'button',
-                  body: { text: '¿Deseas finalizar el pedido?' },
-                  action: {
-                    buttons: [
-                      {
-                        type: 'reply',
-                        reply: { id: 'fin_domi', title: '✅ Finalizar' }
-                      }
-                    ]
-                  },
-                },
-              });
-            } catch (e) {
-              this.logger.warn(
-                `⚠️ Falló botón fin_domi a ${receptor}: ` +
-                (e?.response?.data?.error?.message || e?.message || e)
-              );
-            }
+            await this.sendButtons(
+              receptor, // DOMICILIARIO
+              '¿Deseas finalizar el pedido?',
+              [
+                { id: 'fin_domi', title: 'Finalizar' },
+              ]
+            );
+
           }
         } else {
           // Conversación cerrada:
@@ -2076,26 +2077,15 @@ export class ChatbotService {
 
       // ===== CAMBIAR ZONA (mostrar 2 botones) =====
       if (id === 'cambiar_zona') {
-        try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: mensaje.from, // usa el mismo formato que guardas en BD
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '📍 ¿En qué zona te encuentras?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'set_zona_1', title: '🏙️ Zona Centro' } },  // zona_id = 1
-                  { type: 'reply', reply: { id: 'set_zona_2', title: '🌄 Zona Solarte' } }, // zona_id = 2
-                ],
-              },
-            },
-          });
-        } catch (error: any) {
-          this.logger?.warn?.(`⚠️ Error al enviar botones de zona: ${error?.message || error}`);
-          await this.enviarMensajeTexto(mensaje.from, '❌ No se pudieron mostrar las zonas. Intenta de nuevo.');
-        }
+        await this.sendButtons(
+          mensaje.from,
+          '¿En qué zona te encuentras?',
+          [
+            { id: 'set_zona_1', title: 'Zona Centro' },
+            { id: 'set_zona_2', title: 'Zona Solarte' },
+          ]
+        );
+
         return; // ¡no sigas con otros handlers!
       }
 
@@ -2308,25 +2298,15 @@ export class ChatbotService {
 
         if (!pedidoCheck) {
           await this.enviarMensajeTexto(numero, '⚠️ El pedido ya no existe.');
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch (e) {
-            this.logger.warn(`⚠️ Falló envío de botones (no existe): ${e?.message || e}`);
-          }
+          await this.sendButtons(
+            numero,
+            '¿Quieres seguir disponible para nuevos pedidos?',
+            [
+              { id: 'cambiar_a_disponible', title: 'Disponible' },
+              { id: 'cambiar_a_no_disponible', title: 'No disponible' },
+            ]
+          );
+
           procesados.set(key, now);
           return;
         }
@@ -2417,23 +2397,15 @@ export class ChatbotService {
         if (!ok) {
           await this.enviarMensajeTexto(numero, '⏱️ La oferta ya expiró o se reasignó.');
           // Fallback: botones de estado (desktop a veces no los dibuja automáticamente)
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Quieres seguir disponible para nuevos pedidos?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-                    { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-                  ],
-                },
-              },
-            });
-          } catch { /* noop */ }
+          await this.sendButtons(
+            numero,
+            '¿Quieres seguir disponible para nuevos pedidos?',
+            [
+              { id: 'cambiar_a_disponible', title: 'Disponible' },
+              { id: 'cambiar_a_no_disponible', title: 'No disponible' },
+            ]
+          );
+
           return;
         }
 
@@ -3020,32 +2992,15 @@ export class ChatbotService {
         }
 
         // ✅ Si es DISPONIBLE, pedir zona con botones manuales (axiosWhatsapp)
-        try {
-          await axiosWhatsapp.post('/messages', {
-            messaging_product: 'whatsapp',
-            to: numero,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '📍 ¿En qué zona te encuentras?' },
-              action: {
-                buttons: [
-                  {
-                    type: 'reply',
-                    reply: { id: 'set_zona_1_disponible', title: '🏙️ Zona Centro' }, // zona_id = 1
-                  },
-                  {
-                    type: 'reply',
-                    reply: { id: 'set_zona_2_disponible', title: '🌄 Zona Solarte' }, // zona_id = 2
-                  },
-                ],
-              },
-            },
-          });
-        } catch (error) {
-          this.logger.warn(`⚠️ Error al enviar botones de zona: ${error?.message || error}`);
-          await this.enviarMensajeTexto(numero, '❌ No se pudieron mostrar las zonas. Intenta de nuevo.');
-        }
+        await this.sendButtons(
+          numero,
+          '¿En qué zona te encuentras?',
+          [
+            { id: 'set_zona_1_disponible', title: 'Zona Centro' },
+            { id: 'set_zona_2_disponible', title: 'Zona Solarte' },
+          ]
+        );
+
 
         return;
       }
@@ -3211,27 +3166,15 @@ export class ChatbotService {
                 ].join('\n')
               ).slice(0, 1024); // Body máx. 1024 chars
 
-              try {
-                await axiosWhatsapp.post('/messages', {
-                  messaging_product: 'whatsapp',
-                  to: domiciliario.telefono_whatsapp,
-                  type: 'interactive',
-                  interactive: {
-                    type: 'button',
-                    body: { text: resumenLargo },
-                    action: {
-                      buttons: [
-                        { type: 'reply', reply: { id: `ACEPTAR_${pedidoBase.id}`, title: '✅ Aceptar' } },
-                        { type: 'reply', reply: { id: `RECHAZAR_${pedidoBase.id}`, title: '❌ Rechazar' } },
-                      ],
-                    },
-                  },
-                }, { timeout: 7000 });
-              } catch (e: any) {
-                this.logger.warn(
-                  `⚠️ Falló oferta al domi ${domiciliario.telefono_whatsapp} p=${pedidoBase.id}: ${e?.response?.data?.error?.message || e?.message || e}`
-                );
-              }
+              await this.sendButtons(
+                domiciliario.telefono_whatsapp,
+                resumenLargo,
+                [
+                  { id: `ACEPTAR_${pedidoBase.id}`, title: 'Aceptar' },
+                  { id: `RECHAZAR_${pedidoBase.id}`, title: 'Rechazar' },
+                ]
+              );
+
             } else {
               // 🧾 SERVICIOS 1 y 3: se mantiene tu resumen original
               const partes: string[] = [];
@@ -3260,27 +3203,15 @@ export class ChatbotService {
               }
               const resumenLargo = this.sanitizeWaBody(partes.join('\n')).slice(0, 1024);
 
-              try {
-                await axiosWhatsapp.post('/messages', {
-                  messaging_product: 'whatsapp',
-                  to: domiciliario.telefono_whatsapp,
-                  type: 'interactive',
-                  interactive: {
-                    type: 'button',
-                    body: { text: resumenLargo },
-                    action: {
-                      buttons: [
-                        { type: 'reply', reply: { id: `ACEPTAR_${pedidoBase.id}`, title: '✅ Aceptar' } },
-                        { type: 'reply', reply: { id: `RECHAZAR_${pedidoBase.id}`, title: '❌ Rechazar' } },
-                      ],
-                    },
-                  },
-                }, { timeout: 7000 });
-              } catch (e: any) {
-                this.logger.warn(
-                  `⚠️ Falló oferta al domi ${domiciliario.telefono_whatsapp} p=${pedidoBase.id}: ${e?.response?.data?.error?.message || e?.message || e}`
-                );
-              }
+              await this.sendButtons(
+                domiciliario.telefono_whatsapp,
+                resumenLargo,
+                [
+                  { id: `ACEPTAR_${pedidoBase.id}`, title: 'Aceptar' },
+                  { id: `RECHAZAR_${pedidoBase.id}`, title: 'Rechazar' },
+                ]
+              );
+
             }
             // ——— fin armado oferta ———
 
@@ -3578,21 +3509,46 @@ export class ChatbotService {
 
 
 
+  private async enviarMensajeTexto(numero: any, mensaje?: string): Promise<void> {
+    const to = this.toTelKey(String(numero ?? ''));
 
-  private async enviarMensajeTexto(numero: string, mensaje?: string): Promise<void> {
+    const body = String(mensaje ?? '').trim();
+    const safeBody = body.slice(0, 4096);
+
+    if (!to || !/^\d{11,15}$/.test(to)) {
+      this.logger.warn(`⚠️ No se envía: número inválido. raw="${numero}" to="${to}"`);
+      return;
+    }
+    if (!safeBody) {
+      this.logger.warn(`⚠️ No se envía: mensaje vacío. to="${to}"`);
+      return;
+    }
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body: safeBody },
+    };
+
     try {
-      const response = await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'text',
-        text: { body: mensaje },
-      })
-      this.logger.log(`✅ Mensaje enviado a ${numero}`);
-
-    } catch (error) {
-      this.logger.error('❌ Error al enviar el mensaje:', error.response?.data || error.message);
+      this.logger.debug(`📤 WA payload text: ${JSON.stringify(payload)}`);
+      const response = await axiosWhatsapp.post('/messages', payload, { timeout: 7000 });
+      const msgId = response?.data?.messages?.[0]?.id;
+      this.logger.log(`✅ Mensaje enviado a ${to}${msgId ? ` id=${msgId}` : ''}`);
+    } catch (error: any) {
+      const data = error?.response?.data;
+      this.logger.error('❌ Error WhatsApp al enviar texto', {
+        to,
+        bodyLen: safeBody.length,
+        fbtrace_id: data?.error?.fbtrace_id,
+        details: data?.error?.error_data?.details,
+        message: data?.error?.message || error?.message,
+        payload,
+      });
     }
   }
+
 
 
   // private async enviarListaOpciones(numero: string): Promise<void> {
@@ -3659,34 +3615,17 @@ export class ChatbotService {
 
   // Envía los 2 botones restantes cuando el usuario escribe "más"
   private async enviarMasBotones(numero: string): Promise<void> {
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'Aquí tienes más opciones 👇' },
-          // footer opcional:
-          // footer: { text: 'Escribe "menú" para volver al inicio.' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'opcion_4', title: '🍔 Restaurantes' } }, // 16
-              { type: 'reply', reply: { id: 'opcion_5', title: '🤷 PSQR' } },         // 7
-              { type: 'reply', reply: { id: 'opcion_6', title: '📝 Registrarme' } },         // 7
+    await this.sendButtons(
+      numero,
+      'Aquí tienes más opciones',
+      [
+        { id: 'opcion_4', title: 'Restaurantes' },
+        { id: 'opcion_5', title: 'PSQR' },
+        { id: 'opcion_6', title: 'Registrarme' },
+      ]
+    );
 
-              // Puedes agregar un tercer botón si quieres (máx. 3),
-              // por ejemplo para "Volver al menú":
-              // { type: 'reply', reply: { id: 'menu_inicio', title: '↩️ Menú inicial' } }
-            ]
-          }
-        }
-      });
-
-      this.logger.log(`✅ Botones "más" enviados a ${numero}`);
-    } catch (error: any) {
-      this.logger.error('❌ Error al enviar botones extra:', error.response?.data || error.message);
-    }
+    this.logger.log(`✅ Botones "más" enviados a ${numero}`);
   }
 
 
@@ -3721,28 +3660,18 @@ export class ChatbotService {
     }
 
     // 2️⃣ SIEMPRE enviar botones (pase lo que pase arriba)
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: bodyTexto },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'opcion_1', title: '🛵 Recoger-Entregar' } },
-              { type: 'reply', reply: { id: 'opcion_2', title: '🛒 Hacer compra' } },
-              { type: 'reply', reply: { id: 'opcion_3', title: '💰 Hacer pago' } },
-            ],
-          },
-        },
-      });
+    await this.sendButtons(
+      numero,
+      bodyTexto,
+      [
+        { id: 'opcion_1', title: 'Recoger-Entregar' },
+        { id: 'opcion_2', title: 'Hacer compra' },
+        { id: 'opcion_3', title: 'Hacer pago' },
+      ]
+    );
 
-      this.logger.log(`✅ Botones enviados a ${numero}`);
-    } catch (error) {
-      this.logger.error('❌ Error enviando botones:', error.response?.data || error.message);
-    }
+    this.logger.log(`✅ Botones enviados a ${numero}`);
+
   }
 
 
@@ -3776,24 +3705,17 @@ export class ChatbotService {
         `📞 Tel: ${telefonoRecoger}`
       );
 
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: {
-            text: '¿Confirmas el pedido? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*',
-          },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
-              { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
-              { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
-            ],
-          },
-        },
-      });
+      await this.sendButtons(
+        numero,
+        '¿Confirmas el pedido? Recuerda: una vez asignado el domiciliario no podrás cancelarlo',
+        [
+          { id: 'confirmar_info', title: 'Confirmar' },
+          { id: 'editar_info', title: 'Editar' },
+          { id: 'cancelar_info', title: 'Cancelar' },
+        ]
+      );
+
+
     };
 
     switch (estado.paso) {
@@ -3852,26 +3774,16 @@ export class ChatbotService {
             `📞 Tel: ${estado.datos.telefonoRecoger}`
           );
 
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: {
-                  text: '¿Deseas confirmar ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*',
-                },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'confirmar_info', title: '✅ Sí, confirmar' } },
-                    { type: 'reply', reply: { id: 'editar_info', title: '🔁 No, editar' } },
-                    { type: 'reply', reply: { id: 'cancelar_info', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            });
-          } catch { }
+          await this.sendButtons(
+            numero,
+            '¿Deseas confirmar ahora? Recuerda: una vez asignado el domiciliario no podrás cancelarlo',
+            [
+              { id: 'confirmar_info', title: 'Confirmar' },
+              { id: 'editar_info', title: 'Editar' },
+              { id: 'cancelar_info', title: 'Cancelar' },
+            ]
+          );
+
         } else {
           await this.enviarMensajeTexto(
             numero,
@@ -3966,33 +3878,15 @@ export class ChatbotService {
           ].join('\n')
         );
 
-        // 🔘 Botones (títulos ≤ 20 chars para evitar 131009)
-        try {
-          await axiosWhatsapp.post(
-            '/messages',
-            {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Confirmas el pedido?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'confirmar_compra', title: '✅ Confirmar' } },
-                    { type: 'reply', reply: { id: 'editar_compra', title: '🔁 Editar' } },
-                    { type: 'reply', reply: { id: 'cancelar_compra', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            },
-            { timeout: 7000 },
-          );
-        } catch (e: any) {
-          this.logger.warn(
-            `⚠️ Falló envío de botones compra: ${e?.response?.data?.error?.message || e?.message || e}`
-          );
-        }
+        await this.sendButtons(
+          numero,
+          '¿Confirmas el pedido?',
+          [
+            { id: 'confirmar_compra', title: 'Confirmar' },
+            { id: 'editar_compra', title: 'Editar' },
+            { id: 'cancelar_compra', title: 'Cancelar' },
+          ]
+        );
 
         // Marca anti-duplicados
         estado._ultimoResumen = detalle;
@@ -4046,22 +3940,16 @@ export class ChatbotService {
         `📞 Tel: ${telefonoRecoger}`
       );
 
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '¿Es correcto? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
-              { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
-              { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
-            ],
-          },
-        },
-      });
+      await this.sendButtons(
+        numero,
+        '¿Es correcto? Recuerda: una vez asignado el domiciliario no podrás cancelarlo',
+        [
+          { id: 'confirmar_pago', title: 'Confirmar' },
+          { id: 'editar_pago', title: 'Editar' },
+          { id: 'cancelar_pago', title: 'Cancelar' },
+        ]
+      );
+
     };
 
     switch (estado.paso) {
@@ -4158,24 +4046,16 @@ export class ChatbotService {
           );
 
           // Reenviar botones por comodidad
-          try {
-            await axiosWhatsapp.post('/messages', {
-              messaging_product: 'whatsapp',
-              to: numero,
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Es correcto ahora? *Recuerda: una vez asignado el domiciliario no podrás cancelarlo*' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'confirmar_pago', title: '✅ Sí, confirmar' } },
-                    { type: 'reply', reply: { id: 'editar_pago', title: '🔁 No, editar' } },
-                    { type: 'reply', reply: { id: 'cancelar_pago', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            });
-          } catch { }
+          await this.sendButtons(
+            numero,
+            '¿Es correcto ahora? Recuerda: una vez asignado el domiciliario no podrás cancelarlo',
+            [
+              { id: 'confirmar_pago', title: 'Confirmar' },
+              { id: 'editar_pago', title: 'Editar' },
+              { id: 'cancelar_pago', title: 'Cancelar' },
+            ]
+          );
+
         } else {
           await this.enviarMensajeTexto(
             numero,
@@ -4262,24 +4142,13 @@ export class ChatbotService {
     const botonId = `menu_cancelar_${pedidoId}`;
 
     // 1) Intento con botón interactivo
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: numero,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: `${bodyText}\n\n(Ref: #${pedidoId})` }, // añade la ref también aquí
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: botonId, title: '❌ Cancelar pedido' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botón cancelar a ${numero} (pedido ${pedidoId}): ${e?.response?.data?.error?.message || e?.message || e}`);
-    }
+    await this.sendButtons(
+      numero,
+      `${bodyText}\n\n(Ref: #${pedidoId})`,
+      [
+        { id: botonId, title: 'Cancelar pedido' },
+      ]
+    );
 
     // 2) Fallback para Web/Desktop (texto plano + keyword)
     try {
@@ -4651,27 +4520,14 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
         60 * 1000
       );
 
-      try {
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: telClienteNorm,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: 'Si ya no lo necesitas, puedes cancelar:' },
-            action: {
-              buttons: [
-                {
-                  type: 'reply',
-                  reply: { id: `cancelar_pedido_${pedidoId}`, title: '❌ Cancelar' },
-                },
-              ],
-            },
-          },
-        });
-      } catch (e) {
-        this.logger.warn(`⚠️ Falló envío de botón Cancelar: ${e instanceof Error ? e.message : e}`);
-      }
+      await this.sendButtons(
+        telClienteNorm,
+        'Si ya no lo necesitas, puedes cancelar:',
+        [
+          { id: `cancelar_pedido_${pedidoId}`, title: 'Cancelar' },
+        ]
+      );
+
       return;
     }
 
@@ -4710,27 +4566,14 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
     );
 
 
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: telClienteNorm,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'Si ya no lo necesitas, puedes cancelar:' },
-          action: {
-            buttons: [
-              {
-                type: 'reply',
-                reply: { id: `cancelar_pedido_${pedidoId}`, title: '❌ Cancelar' },
-              },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`⚠️ Falló envío de botón Cancelar: ${e instanceof Error ? e.message : e}`);
-    }
+    await this.sendButtons(
+      telClienteNorm,
+      'Si ya no lo necesitas, puedes cancelar:',
+      [
+        { id: `cancelar_pedido_${pedidoId}`, title: 'Cancelar' },
+      ]
+    );
+
 
     await this.mostrarMenuPostConfirmacion(
       telClienteNorm,
@@ -4788,8 +4631,8 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
   private async crearPedidoDesdeSticker(numeroWhatsApp: string, comercio: any, nombreContacto?: string) {
     // IDs de botones (solo confirmación previa del cliente)
-    const BTN_STICKER_CONFIRM_SI = 'sticker_confirmar_si';
-    const BTN_STICKER_CONFIRM_NO = 'sticker_confirmar_no';
+    const BTN_STICKER_CONFIRM_SI = 'stk_ok';
+    const BTN_STICKER_CONFIRM_NO = 'stk_cancel';
 
     console.log('-------------------------------------------------');
     console.log('📌 Crear pedido desde sticker', comercio);
@@ -4953,22 +4796,15 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
       st.stickerConfirmPayload = { telClienteNorm, comercioSnap: cSnap, nombreContacto: nombreContacto || null };
       estadoUsuarios.set(telClienteNorm, st);
+      await this.sendButtons(
+        telClienteNorm,
+        preview,
+        [
+          { id: BTN_STICKER_CONFIRM_SI, title: 'Confirmar' },
+          { id: BTN_STICKER_CONFIRM_NO, title: 'Cancelar' },
+        ]
+      );
 
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: telClienteNorm,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: preview },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: BTN_STICKER_CONFIRM_SI, title: '✅ Confirmar' } },
-              { type: 'reply', reply: { id: BTN_STICKER_CONFIRM_NO, title: '❌ Cancelar' } },
-            ],
-          },
-        },
-      });
       return; // esperar confirmación
     }
 
@@ -5039,20 +4875,14 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
 
       try {
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to: telClienteNorm,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: cuerpo },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: `cancelar_pedido_${pedidoCreado.id}`, title: '❌ Cancelar pedido' } },
-              ],
-            },
-          },
-        });
+        await this.sendButtons(
+          telClienteNorm,
+          cuerpo,
+          [
+            { id: `cancelar_pedido_${pedidoCreado.id}`, title: 'Cancelar pedido' },
+          ]
+        );
+
         await this.enviarMensajeTexto(
           telClienteNorm,
           'Si no ves el botón, responde con la palabra *CANCELAR* para anular tu pedido.'
@@ -5168,27 +4998,13 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
 
 
   private async enviarBotonFinalizarAlDomi(to: string) {
-    try {
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: '*DOMICILIO ASIGNADO!*, Deseas finalizar el pedido?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'fin_domi', title: '✅ Finalizar' } },
-            ],
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(
-        `⚠️ Falló envío de botón fin_domi a ${to}: ` +
-        (e?.response?.data?.error?.message || e?.message || e)
-      );
-    }
+    await this.sendButtons(
+      to,
+      'DOMICILIO ASIGNADO. ¿Deseas finalizar el pedido?',
+      [
+        { id: 'fin_domi', title: 'Finalizar' },
+      ]
+    );
   }
 
 
@@ -5278,21 +5094,15 @@ Gracias por tu entrega y compromiso 👏
 
 👉 *Ahora elige tu estado:*`
       );
-      await axiosWhatsapp.post('/messages', {
-        messaging_product: 'whatsapp',
-        to: domi,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'Cambia tu disponibilidad: ES OBLIGATORIO!!' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'cambiar_a_disponible', title: '✅ Disponible' } },
-              { type: 'reply', reply: { id: 'cambiar_a_no_disponible', title: '🛑 No disponible' } },
-            ],
-          },
-        },
-      });
+      await this.sendButtons(
+        domi,
+        'Cambia tu disponibilidad: es obligatorio',
+        [
+          { id: 'cambiar_a_disponible', title: 'Disponible' },
+          { id: 'cambiar_a_no_disponible', title: 'No disponible' },
+        ]
+      );
+
     } catch (e: any) {
       this.logger.warn(
         `⚠️ Botones de estado al domi fallaron: ${e?.response?.data?.error?.message || e?.message || e
@@ -5717,21 +5527,15 @@ Gracias por tu entrega y compromiso 👏
 
     for (let i = 0; i < 3 && !enviado; i++) {
       try {
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
+        await this.sendButtons(
           to,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: body },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: `aceptar_pedido_${pedidoId}`, title: '✅ Aceptar' } },
-                { type: 'reply', reply: { id: `rechazar_pedido_${pedidoId}`, title: '❌ Rechazar' } },
-              ],
-            },
-          },
-        });
+          body,
+          [
+            { id: `aceptar_pedido_${pedidoId}`, title: 'Aceptar' },
+            { id: `rechazar_pedido_${pedidoId}`, title: 'Rechazar' },
+          ]
+        );
+
         enviado = true;
       } catch (e: any) {
         const status = Number(e?.response?.status);
@@ -5745,23 +5549,15 @@ Gracias por tu entrega y compromiso 👏
     // (D) Fallback: texto + botones mínimos otra vez
     if (!enviado) {
       try { await this.enviarMensajeTexto(to, body); } catch { }
-      try {
-        await axiosWhatsapp.post('/messages', {
-          messaging_product: 'whatsapp',
-          to,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: 'Tomar pedido:' },
-            action: {
-              buttons: [
-                { type: 'reply', reply: { id: `aceptar_pedido_${pedidoId}`, title: '✅ Aceptar' } },
-                { type: 'reply', reply: { id: `rechazar_pedido_${pedidoId}`, title: '❌ Rechazar' } },
-              ],
-            },
-          },
-        });
-      } catch { }
+      await this.sendButtons(
+        to,
+        'Tomar pedido:',
+        [
+          { id: `aceptar_pedido_${pedidoId}`, title: 'Aceptar' },
+          { id: `rechazar_pedido_${pedidoId}`, title: 'Rechazar' },
+        ]
+      );
+
     }
   }
 
