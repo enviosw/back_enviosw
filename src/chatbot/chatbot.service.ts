@@ -17,10 +17,10 @@ import { ChatService } from './chat.service';
 
 const estadoUsuarios = new Map<string, any>();
 const temporizadoresInactividad = new Map<string, NodeJS.Timeout>(); // ⏰ Temporizadores
-const temporizadoresEstado = new Map<string, NodeJS.Timeout>(); // TTL para solicitar estado a domiciliario
 const bloqueoMenu = new Map<string, NodeJS.Timeout>(); // Bloqueo temporal del menú
 
-const ESTADO_COOLDOWN_MS = 1 * 60 * 1000; // 2 min
+const temporizadoresEstado = new Map<string, NodeJS.Timeout>(); // TTL para solicitar estado a domiciliario
+const ESTADO_COOLDOWN_MS = 30 * 1000; // 30 segundos
 
 function isExpired(ts?: number) {
   return !ts || Date.now() >= ts;
@@ -95,6 +95,8 @@ export class ChatbotService {
 
   ) { }
 
+
+  
 
 
   private waTo(raw: any): string {
@@ -3621,7 +3623,6 @@ export class ChatbotService {
       [
         { id: 'opcion_4', title: 'Restaurantes' },
         { id: 'opcion_5', title: 'PSQR' },
-        { id: 'opcion_6', title: 'Registrarme' },
       ]
     );
 
@@ -4791,7 +4792,7 @@ Para no dejarte sin servicio, te compartimos opciones adicionales:
         cSnap.telefono ? `📞 *Tel:* ${cSnap.telefono}` : '',
         '',
         '¿Deseas *solicitar ahora* un domiciliario? \n',
-        'Si no aparecen los botones, escribe **Si** para *confirmar* o **No** para *cancelar*.'
+        'SI NO FUNCIONAN LOS BOTONES, ESCRIBE **SÍ** PARA *CONFIRMAR* O **NO** PARA *CANCELAR*.'
       ].filter(Boolean).join('\n');
 
       st.stickerConfirmPayload = { telClienteNorm, comercioSnap: cSnap, nombreContacto: nombreContacto || null };
