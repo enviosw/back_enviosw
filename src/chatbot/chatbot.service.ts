@@ -3987,7 +3987,7 @@ export class ChatbotService {
           '💰 Vamos a recoger dinero/facturas.\n' +
           '📍 Envíame la *dirección de RECOGER*.\n\n' +
           '👉 Puedes escribir en un solo mensaje la dirección y alguna referencia.\n\n' +
-          '🔐 Si el pago supera 200.000, escribe al 314 242 3130.'
+          '🔐 Si el pago supera 200.000, escribe al 310 885 7311.'
         );
         estado.paso = 1;
         break;
