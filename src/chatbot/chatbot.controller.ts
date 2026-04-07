@@ -47,12 +47,17 @@ export class ChatbotController {
   }
 
 
-  @Post()
-  async resibiMensaje(@Body() body: any) {
-    this.logger.debug('webhook resibido');
-    await this.chatbotService.procesarMensajeEntrante(body);
-    return { status: 'Mensaje recibido' };
-  }
+@Post()
+resibiMensaje(@Body() body: any) {
+  this.logger.debug('webhook recibido');
+
+  // responder rápido a WhatsApp
+  this.chatbotService.procesarMensajeEntrante(body).catch((err) => {
+    this.logger.error('Error procesando mensaje entrante', err);
+  });
+
+  return { status: 'ok' };
+}
 
     // ✅ Lista todos los mensajes entre un domiciliario y un cliente
   @Get('mensajes')

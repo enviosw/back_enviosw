@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { PrecioDomicilio } from 'src/chatbot/entities/precio-domicilio.entity';
+import { PrecioDomicilio } from '../chatbot/entities/precio-domicilio.entity';
 import { PrecioDomicilioService } from './precio-domicilio.service';
 import { PrecioDomicilioController } from './precio-domicilio.controller';
 

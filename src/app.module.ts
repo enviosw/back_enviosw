@@ -21,6 +21,9 @@ import { ShortlinksModule } from './shortlinks/shortlinks.module';
 import { ComerciosQrModule } from './shortlinks/comercios-qr.module';
 import { PrecioDomicilioModule } from './common/precio-domicilio.module';
 import { ZonasModule } from './zonas/zonas.module';
+import { PublicidadModule } from './publicidad/publicidad.module';
+import { WelcomeImageModule } from './chatbot/welcome-image.module';
+import { PhonesModule } from './chatbot/phones.module';
 
 @Module({
   imports: [
@@ -83,7 +86,13 @@ import { ZonasModule } from './zonas/zonas.module';
     
     PrecioDomicilioModule,
     
-    ZonasModule
+    ZonasModule,
+    
+    PublicidadModule,
+
+    WelcomeImageModule,
+    
+    PhonesModule
 
   ],
 })

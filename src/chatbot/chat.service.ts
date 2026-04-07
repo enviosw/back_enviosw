@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Conversacion } from './entities/conversacion.entity';
 import { Mensaje } from './entities/mensajes.entity';
 
@@ -12,6 +12,9 @@ export class ChatService {
 
     @InjectRepository(Conversacion)
     private readonly conversacionRepository: Repository<Conversacion>,
+
+        private readonly dataSource: DataSource,
+
   ) {}
 
   /**
@@ -99,5 +102,26 @@ async listarMensajesPorConversacionId(idConversacion: string): Promise<Mensaje[]
     chats.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
     return chats;
+  }
+
+
+  
+  async vaciarChatsYReiniciarIds(): Promise<void> {
+    const qr = this.dataSource.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+
+    try {
+      // ⚠️ Asegura nombres reales de tablas
+      await qr.query(`TRUNCATE TABLE "mensajes" RESTART IDENTITY CASCADE;`);
+      await qr.query(`TRUNCATE TABLE "conversaciones" RESTART IDENTITY CASCADE;`);
+
+      await qr.commitTransaction();
+    } catch (e) {
+      await qr.rollbackTransaction();
+      throw e;
+    } finally {
+      await qr.release();
+    }
   }
 }

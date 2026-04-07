@@ -12,10 +12,14 @@ export class Categoria {
   nombre: string;
 
   // Relación con Producto
-  @OneToMany(() => Producto, (producto) => producto.categoria, { onDelete: 'SET NULL' })
+  // ...
+  @OneToMany(() => Producto, (producto) => producto.categoria)
   productos: Producto[];
 
-  @ManyToOne(() => Comercio, (comercio) => comercio.categorias)
+  @ManyToOne(() => Comercio, (comercio) => comercio.categorias, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'comercio_id' })
   comercio: Comercio;
+
 }

@@ -5,7 +5,7 @@ import { Comercio } from './entities/comercio.entity';
 import { CreateComercioDto } from './dto/create-comercio.dto';
 import { UpdateComercioDto } from './dto/update-comercio.dto';
 import { ComercioQuery } from './interfaces/comercio.interface';
-import { Zona } from 'src/zonas/entities/zona.entity';
+import { Zona } from '../zonas/entities/zona.entity';
 
 @Injectable()
 export class ComerciosService {
@@ -202,7 +202,7 @@ async getById(id: number) {
     search: string = '',
     page: number = 1,
   ): Promise<{ data: Comercio[]; total: number; page: number; lastPage: number }> {
-    const take = 20;
+    const take = 30;
     const skip = (page - 1) * take;
     const subQb = this.comercioRepo
       .createQueryBuilder('comercio')
@@ -338,22 +338,36 @@ async findByTelefono(telefono: string): Promise<{
   zonaId: number | null;
   zonaNombre: string | null;
 }> {
+  const raw = String(telefono ?? '');
+  const digits = raw.replace(/\D/g, '').trim();   // solo dígitos
+  const tel10 = digits.slice(-10);                // últimos 10
+  const tel57 = tel10 ? `57${tel10}` : digits;
+
+  const tels = Array.from(new Set([tel10, tel57, digits].filter(Boolean)));
+
   const comercio = await this.comercioRepo
     .createQueryBuilder('comercio')
-    .leftJoin('comercio.zona', 'zona') // 👈 une la relación
+    .leftJoinAndSelect('comercio.zona', 'zona')
     .select([
       'comercio.id',
       'comercio.nombre_comercial',
       'comercio.telefono',
+      'comercio.telefono_secundario',
       'comercio.direccion',
       'zona.id',
       'zona.nombre',
     ])
-    .where('TRIM(comercio.telefono) = :telefono', { telefono })
+    .where(
+      `(TRIM(comercio.telefono) IN (:...tels)
+        OR TRIM(comercio.telefono_secundario) IN (:...tels))`,
+      { tels },
+    )
     .getOne();
 
   if (!comercio) {
-    throw new NotFoundException(`No se encontró un comercio con el teléfono ${telefono}`);
+    throw new NotFoundException(
+      `No se encontró un comercio con el teléfono ${telefono} (normalizado: ${tels.join(', ')})`,
+    );
   }
 
   return {
