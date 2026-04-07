@@ -7,19 +7,21 @@ import { UsuariosModule } from '../usuarios/usuarios.module';
 import { RefreshTokenService } from './refresh-token.service';
 import { ClientesModule } from '../clientes/clientes.module';
 import { AuthGuard } from './auth.guard';
-import { jwtConstants } from './constants/jwt.constant'; // asegúrate de tener esto
+import { jwtConstants } from './constants/jwt.constant';
 
 @Module({
   imports: [
     forwardRef(() => UsuariosModule),
     forwardRef(() => ClientesModule),
     JwtModule.register({
-      secret: jwtConstants.accessTokenSecret, // ✅ secreto desde tu config
-      signOptions: { expiresIn: jwtConstants.accessTokenExpiration || '1d' },
+      secret: jwtConstants.accessTokenSecret,
+      signOptions: {
+        expiresIn: jwtConstants.accessTokenExpiration, // ✅ FIX
+      },
     }),
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, RefreshTokenService, AuthGuard],
-  exports: [AuthService, AuthGuard, JwtModule], // ✅ exporta JwtModule para otros módulos
+  exports: [AuthService, AuthGuard, JwtModule],
 })
-export class AuthModule { }
+export class AuthModule {}

@@ -1,12 +1,18 @@
 // src/config/jwtConstants.ts
 import * as dotenv from 'dotenv';
-dotenv.config(); // ✅ Cargar primero
+import { StringValue } from 'ms';
+
+dotenv.config();
 
 export const jwtConstants = {
-  accessTokenSecret: process.env.ACCESS_TOKEN_SECRET,
-  refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET,
-  accessTokenExpiration: process.env.ACCESS_TOKEN_EXPIRATION,
-  refreshTokenExpiration: process.env.REFRESH_TOKEN_EXPIRATION,
+  accessTokenSecret: process.env.ACCESS_TOKEN_SECRET!,
+  refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET!,
+
+  accessTokenExpiration:
+    process.env.ACCESS_TOKEN_EXPIRATION as StringValue,
+
+  refreshTokenExpiration:
+    process.env.REFRESH_TOKEN_EXPIRATION as StringValue,
 };
 
 export const whatsappConstants = {
@@ -22,7 +28,6 @@ export const stickerConstants = {
   stickerChad: process.env.SHAD_STICKER,
 };
 
-
 export const urlImagenConstants = {
-  urlImg: process.env.BASE_URL_BACK
+  urlImg: process.env.BASE_URL_BACK,
 };
