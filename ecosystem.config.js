@@ -4,17 +4,14 @@ module.exports = {
       name: "enviosw-api",
       script: "dist/src/main.js",
 
-      exec_mode: "fork",   // correcto para chatbot
-      instances: 1,        // solo una instancia
+      exec_mode: "fork",
+      instances: 1,
 
       autorestart: true,
       watch: false,
 
-      // memoria segura para producción
-      max_memory_restart: "800M",
-
-      // más memoria para Node si el bot procesa mucho
-      node_args: "--max-old-space-size=1024",
+      max_memory_restart: "1.5G",
+      node_args: "--max-old-space-size=2048",
 
       env: {
         NODE_ENV: "production",
