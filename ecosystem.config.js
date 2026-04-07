@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "enviosw-api",
+      name: "backend_envios_w",
       script: "dist/src/main.js",
 
       exec_mode: "fork",
